@@ -52,7 +52,7 @@ you must distinguish — the correct one determines the action plan:
 
   CONTEXT D — Inside a JavaScript string (script block or event handler):
     Evidence pattern: var x = 'USER_VALUE'; or data: "USER_VALUE"
-    Risk: JS context escape. Characters to test: ' " \ ` </script>
+    Risk: JS context escape. Characters to test: ' " \\ ` </script>
 
   CONTEXT E — Inside a JavaScript template literal:
     Evidence pattern: `Hello ${USER_VALUE}` or `Welcome USER_VALUE`
