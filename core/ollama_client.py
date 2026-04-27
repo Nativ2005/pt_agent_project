@@ -64,6 +64,7 @@ class OllamaClient:
             "system": system_prompt,
             "prompt": context_data,
             "stream": True,
+            "options": {"temperature": 0.1},
         }
 
         try:
@@ -137,6 +138,7 @@ class OllamaClient:
             "system": system_prompt,
             "prompt": context_data,
             "stream": True,
+            "options": {"temperature": 0.1},
         }
         try:
             async for token in self._stream(payload):

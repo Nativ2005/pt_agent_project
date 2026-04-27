@@ -1,147 +1,115 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import AsyncIterator, Sequence
 
-from core.knowledge import VULN_KNOWLEDGE_BASE, VulnEntry, format_for_prompt
+from core.knowledge import VULN_KNOWLEDGE_BASE
 from core.models import BurpRequest, SwaggerEndpoint
 from core.ollama_client import OllamaClient
-from prompts.system_prompts import get_system_prompt
+from prompts.system_prompts import RED_TEAMER_PROMPT
 
 _DEFAULT_MODEL = "llama3:latest"
-
-# ---------------------------------------------------------------------------
-# Signal map — maps vuln IDs to compiled regex patterns.
-#
-# The router runs every pattern against the combined signal string built from
-# a request's path + query + headers + body.  A match triggers injection of
-# that vuln's knowledge entry.
-#
-# To add routing for a new vuln: add its ID here with one or more patterns.
-# The ID must match a key in VULN_KNOWLEDGE_BASE.
-# ---------------------------------------------------------------------------
-
-_RAW_SIGNALS: dict[str, list[str]] = {
-    "sqli": [
-        r"id=\d+",                          # numeric ID param
-        r"(search|query|q|filter|where|order|sort|limit|offset)=",
-        r"(username|user|login|email|pass)",
-        r"(SELECT|INSERT|UPDATE|DELETE|UNION|WHERE|ORDER BY)",
-    ],
-    "ssrf": [
-        r"https?://",                        # URL value in any param/body
-        r"(url|uri|dest|destination|redirect|next|continue|src|href|"
-        r"image|load|fetch|webhook|callback|feed|endpoint)=",
-        r"(url|uri|dest|redirect|src|href|image|load|fetch|webhook|"
-        r"callback|feed|endpoint)[\"']?\s*:",  # JSON key
-    ],
-    "xxe": [
-        r"<\?xml",
-        r"<!DOCTYPE",
-        r"<!ENTITY",
-        r"application/xml",
-        r"text/xml",
-        r"application/soap\+xml",
-        r"\.xml(\?|$)",
-        r"(soap|wsdl|xml|rss|atom|svg)",
-    ],
-    "cmdi": [
-        r"(cmd|exec|command|run|shell|ping|nslookup|host|dig|query|"
-        r"ip|domain|filename|file|path|report|convert|process)=",
-        r"(cmd|exec|command|shell|ping|nslookup|process)[\"']?\s*:",  # JSON key
-        r"(\||;|&&|\$\(|`)",                 # shell metacharacters in values
-    ],
-    "jwt": [
-        r"[Bb]earer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*",
-        r"[Aa]uthorization\s*:",
-        r"(token|access_token|id_token|refresh_token)[\"']?\s*:",
-        r"eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+",  # raw JWT prefix
-    ],
-    "idor": [
-        r"/\d{1,10}(/|$|\?)",               # numeric ID in path
-        r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",  # UUID
-        r"(user_id|account_id|order_id|invoice_id|document_id|"
-        r"resource_id|profile_id|record_id)=",
-        r"(user_id|account_id|order_id|invoice_id)[\"']?\s*:",  # JSON key
-    ],
-    "mass_assignment": [
-        r"(POST|PUT|PATCH)\s",
-        r"application/json",
-        r"application/x-www-form-urlencoded",
-        r"(role|is_admin|admin|verified|balance|credit|"
-        r"permissions|account_type|status)[\"']?\s*[=:]",
-    ],
-    "ssti": [
-        r"(template|render|view|page|name|greeting|subject|message|"
-        r"body|content|output|preview|report)=",
-        r"\{\{.*\}\}",                       # already-injected template syntax
-        r"\$\{.*\}",
-        r"(jinja|twig|freemarker|smarty|velocity|thymeleaf)",
-    ],
-    "deserial": [
-        r"rO0AB",                            # Java serialised object (base64)
-        r"O:\d+:",                           # PHP serialised object
-        r"__VIEWSTATE",
-        r"application/x-java-serialized-object",
-        r"(session|state|data|payload|object|token)=[A-Za-z0-9+/]{20,}={0,2}",
-    ],
-    "graphql": [
-        r"graphql",
-        r"/gql(\?|$|/)",
-        r"(query|mutation|subscription)\s*[\({]",
-        r"application/graphql",
-        r"__schema|__typename|__type",
-    ],
-}
-
-# Compile once at import time.
-_SIGNAL_MAP: dict[str, list[re.Pattern[str]]] = {
-    vuln_id: [re.compile(p, re.IGNORECASE) for p in patterns]
-    for vuln_id, patterns in _RAW_SIGNALS.items()
-}
 
 
 # ---------------------------------------------------------------------------
 # Knowledge router
 # ---------------------------------------------------------------------------
 
-def get_relevant_knowledge(
-    requests: Sequence[BurpRequest],
-    endpoints: Sequence[SwaggerEndpoint],
-) -> dict[str, VulnEntry]:
-    """Analyse requests and endpoints and return the matching KB entries.
+def _get_knowledge_context(signal: str) -> str:
+    """Scan *signal* for trigger keywords and return matched heuristics.
 
-    Builds a single signal string from all observable surfaces
-    (path, query, headers, body, method, content-type) and runs every
-    compiled pattern against it.  Only entries with at least one match
-    are returned, keeping the injected context minimal.
+    Each matched entry contributes one block:
+        [VulnName]: <heuristic text>
+
+    If nothing matches, returns an empty string so the prompt placeholder
+    is left blank rather than filled with noise.
     """
-    signal_parts: list[str] = []
+    matched: list[str] = []
+    signal_lower = signal.lower()
 
-    for req in requests:
-        signal_parts.append(f"{req.method} {req.path}")
-        for k, v in req.headers.items():
-            signal_parts.append(f"{k}: {v}")
+    for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+        for keyword in entry["trigger_keywords"]:
+            if keyword.lower() in signal_lower:
+                matched.append(f"[{vuln_name}]: {entry['heuristic']}")
+                break  # one match per vuln is enough
+
+    return "\n\n".join(matched)
+
+
+# ---------------------------------------------------------------------------
+# Traffic serialiser (shared between analyze / analyze_stream)
+# ---------------------------------------------------------------------------
+
+def _build_traffic_context(
+    burp_requests: Sequence[BurpRequest],
+    swagger_endpoints: Sequence[SwaggerEndpoint],
+) -> str:
+    """Serialise all parsed input into a compact, readable traffic string."""
+    sections: list[str] = []
+
+    for i, req in enumerate(burp_requests, start=1):
+        lines = [f"### Request {i}: {req.method} {req.host}{req.path}"]
+        lines.append(f"Host: {req.host}")
+        lines.append(f"Method: {req.method}  Path: {req.path}")
+
+        if req.headers:
+            lines.append("Headers:")
+            for k, v in req.headers.items():
+                lines.append(f"  {k}: {v}")
+
         if req.body:
-            signal_parts.append(req.body)
+            try:
+                pretty = json.dumps(json.loads(req.body), indent=2)
+                lines.append(f"Body (JSON):\n{pretty}")
+            except (json.JSONDecodeError, ValueError):
+                lines.append(f"Body:\n{req.body}")
+        else:
+            lines.append("Body: (empty)")
 
-    for ep in endpoints:
-        signal_parts.append(f"{ep.method} {ep.full_url}")
-        signal_parts.extend(ep.parameters)
-        if ep.summary:
-            signal_parts.append(ep.summary)
+        sections.append("\n".join(lines))
 
-    signal = "\n".join(signal_parts)
+    if swagger_endpoints:
+        ep_lines = [f"### API Surface ({len(swagger_endpoints)} endpoint(s))"]
+        for ep in swagger_endpoints:
+            params = ", ".join(ep.parameters) if ep.parameters else "none"
+            ep_lines.append(
+                f"  {ep.method} {ep.full_url}  params=[{params}]"
+                + (f"  # {ep.summary}" if ep.summary else "")
+            )
+        sections.append("\n".join(ep_lines))
 
-    matched: dict[str, VulnEntry] = {}
-    for vuln_id, patterns in _SIGNAL_MAP.items():
-        if vuln_id not in VULN_KNOWLEDGE_BASE:
-            continue
-        if any(p.search(signal) for p in patterns):
-            matched[vuln_id] = VULN_KNOWLEDGE_BASE[vuln_id]
+    return "\n\n---\n\n".join(sections) if sections else "(no traffic data provided)"
 
-    return matched
+
+def _build_signal(
+    burp_requests: Sequence[BurpRequest],
+    swagger_endpoints: Sequence[SwaggerEndpoint],
+) -> str:
+    """Flatten all observable surfaces into one string for keyword scanning."""
+    parts: list[str] = []
+    for req in burp_requests:
+        parts.append(f"{req.method} {req.path}")
+        parts.extend(f"{k}: {v}" for k, v in req.headers.items())
+        if req.body:
+            parts.append(req.body)
+    for ep in swagger_endpoints:
+        parts.append(f"{ep.method} {ep.full_url}")
+        parts.extend(ep.parameters)
+    return "\n".join(parts)
+
+
+def _build_prompt(
+    burp_requests: Sequence[BurpRequest],
+    swagger_endpoints: Sequence[SwaggerEndpoint],
+) -> str:
+    """Return the fully-formatted RED_TEAMER_PROMPT ready for Ollama."""
+    signal = _build_signal(burp_requests, swagger_endpoints)
+    knowledge_context = _get_knowledge_context(signal)
+    traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
+    return RED_TEAMER_PROMPT.format(
+        knowledge_context=knowledge_context,
+        traffic_context=traffic_context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +119,9 @@ def get_relevant_knowledge(
 class AuraAnalyzer:
     """Orchestrates the full analysis pipeline.
 
-    Takes parsed Pydantic objects, routes to the relevant knowledge entries,
-    injects that knowledge into the LLM context, and streams/returns the report.
+    1. Routes the parsed input through VULN_KNOWLEDGE_BASE to select relevant heuristics.
+    2. Formats the RED_TEAMER_PROMPT with {knowledge_context} and {traffic_context}.
+    3. Sends the complete prompt to OllamaClient (temperature=0.1 is set in the client).
     """
 
     def __init__(
@@ -168,22 +137,17 @@ class AuraAnalyzer:
             base_url=ollama_base_url,
             read_timeout=read_timeout,
         )
-        self._system_prompt = get_system_prompt(env)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     async def analyze(
         self,
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> str:
-        """Run the full PT analysis and return a Markdown report."""
-        context = self._build_context(burp_requests or [], swagger_endpoints or [])
+        """Run the full PT analysis and return a Markdown report string."""
+        prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
         return await self._client.generate_analysis(
-            system_prompt=self._system_prompt,
-            context_data=context,
+            system_prompt="",
+            context_data=prompt,
         )
 
     async def analyze_stream(
@@ -191,91 +155,10 @@ class AuraAnalyzer:
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the PT analysis token-by-token as it is generated."""
-        context = self._build_context(burp_requests or [], swagger_endpoints or [])
+        """Stream the PT analysis token-by-token."""
+        prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
         async for token in self._client.generate_analysis_stream(
-            system_prompt=self._system_prompt,
-            context_data=context,
+            system_prompt="",
+            context_data=prompt,
         ):
             yield token
-
-    # ------------------------------------------------------------------
-    # Context construction
-    # ------------------------------------------------------------------
-
-    def _build_context(
-        self,
-        burp_requests: Sequence[BurpRequest],
-        swagger_endpoints: Sequence[SwaggerEndpoint],
-    ) -> str:
-        sections: list[str] = []
-
-        sections.append(
-            f"# AuraPT Analysis Context\n\nEnvironment: **{self.env.upper()}**"
-        )
-
-        # Dynamic knowledge injection — only relevant entries are included.
-        matched_knowledge = get_relevant_knowledge(burp_requests, swagger_endpoints)
-        if matched_knowledge:
-            knowledge_block = format_for_prompt(matched_knowledge)
-            sections.append(knowledge_block)
-
-        if burp_requests:
-            sections.append(self._format_burp_section(burp_requests))
-
-        if swagger_endpoints:
-            sections.append(self._format_swagger_section(swagger_endpoints))
-
-        if not burp_requests and not swagger_endpoints:
-            sections.append("_No input data provided._")
-
-        return "\n\n---\n\n".join(sections)
-
-    # ------------------------------------------------------------------
-    # Section formatters
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _format_burp_section(requests: Sequence[BurpRequest]) -> str:
-        lines: list[str] = [
-            f"## Captured HTTP Requests (Burp Suite) — {len(requests)} request(s)\n"
-        ]
-        for i, req in enumerate(requests, start=1):
-            lines.append(f"### Request {i}: {req.method} {req.host}{req.path}")
-            lines.append(f"- **Host:** `{req.host}`")
-            lines.append(f"- **Method:** `{req.method}`")
-            lines.append(f"- **Path:** `{req.path}`")
-
-            if req.headers:
-                lines.append("- **Headers:**")
-                for k, v in req.headers.items():
-                    lines.append(f"  - `{k}: {v}`")
-
-            if req.body:
-                try:
-                    pretty = json.dumps(json.loads(req.body), indent=2)
-                    lines.append(f"- **Body (JSON):**\n```json\n{pretty}\n```")
-                except (json.JSONDecodeError, ValueError):
-                    lines.append(f"- **Body:**\n```\n{req.body}\n```")
-            else:
-                lines.append("- **Body:** _(empty)_")
-
-            lines.append("")
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_swagger_section(endpoints: Sequence[SwaggerEndpoint]) -> str:
-        lines: list[str] = [
-            f"## API Surface (Swagger / OpenAPI) — {len(endpoints)} endpoint(s)\n",
-            "| Method | Full URL | Parameters | Operation ID | Summary |",
-            "|--------|----------|------------|--------------|---------|",
-        ]
-        for ep in endpoints:
-            params = ", ".join(f"`{p}`" for p in ep.parameters) if ep.parameters else "—"
-            op_id = ep.operation_id or "—"
-            summary = (ep.summary or "—").replace("|", "\\|")
-            lines.append(
-                f"| `{ep.method}` | `{ep.full_url}` | {params} | {op_id} | {summary} |"
-            )
-        return "\n".join(lines)
