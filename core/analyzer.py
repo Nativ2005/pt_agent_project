@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import parse_qs, unquote_plus, urlparse
 from typing import AsyncIterator, Sequence
 
 from core.knowledge import VULN_KNOWLEDGE_BASE
@@ -35,6 +36,89 @@ def _get_knowledge_context(signal: str) -> str:
                 break  # one match per vuln is enough
 
     return "\n\n".join(matched)
+
+
+# ---------------------------------------------------------------------------
+# Python Pre-Processor — exact substring search, Python-side
+# ---------------------------------------------------------------------------
+
+_SNIPPET_RADIUS = 75  # characters before/after match to extract
+
+
+def _extract_params(req: BurpRequest) -> dict[str, str]:
+    """Return {param_name: decoded_value} from query string and request body."""
+    params: dict[str, str] = {}
+
+    # Query-string parameters from the path.
+    parsed = urlparse(req.path)
+    for name, values in parse_qs(parsed.query, keep_blank_values=True).items():
+        params[name] = unquote_plus(values[0])
+
+    # Form-encoded body parameters.
+    if req.body:
+        content_type = req.headers.get("Content-Type", "")
+        if "application/x-www-form-urlencoded" in content_type:
+            for name, values in parse_qs(req.body, keep_blank_values=True).items():
+                params[name] = unquote_plus(values[0])
+        else:
+            # Try JSON body — extract string leaf values.
+            try:
+                parsed_json = json.loads(req.body)
+                if isinstance(parsed_json, dict):
+                    for k, v in parsed_json.items():
+                        if isinstance(v, str):
+                            params[k] = v
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    return params
+
+
+def _make_snippet(haystack: str, match_start: int, match_len: int) -> str:
+    start = max(0, match_start - _SNIPPET_RADIUS)
+    end = min(len(haystack), match_start + match_len + _SNIPPET_RADIUS)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(haystack) else ""
+    return f"{prefix}{haystack[start:end]}{suffix}"
+
+
+def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
+    """Search every decoded parameter value inside the captured response body.
+
+    Returns a formatted <system_hints> content string describing every match
+    found, or a single 'no matches' line if nothing was found.
+    Python does the exact string search so the LLM never has to.
+    """
+    hints: list[str] = []
+
+    for req in requests:
+        if not req.response_body:
+            continue
+
+        params = _extract_params(req)
+        endpoint = f"{req.method} {req.path}"
+
+        for param, decoded_val in params.items():
+            if len(decoded_val) < 2:  # skip trivially short values (e.g., "1")
+                continue
+
+            idx = req.response_body.find(decoded_val)
+            if idx == -1:
+                continue
+
+            snippet = _make_snippet(req.response_body, idx, len(decoded_val))
+            hints.append(
+                f"PYTHON PRE-PROCESSOR ALERT [{endpoint}]\n"
+                f"  Parameter : '{param}'\n"
+                f"  Decoded value : '{decoded_val}'\n"
+                f"  Status : FOUND IN RESPONSE BODY\n"
+                f"  Context Snippet : `{snippet}`"
+            )
+
+    if not hints:
+        return "No parameter reflections detected by Python pre-processor."
+
+    return "\n\n".join(hints)
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +216,10 @@ def _build_prompt(
     signal = _build_signal(burp_requests, swagger_endpoints)
     knowledge_context = _get_knowledge_context(signal)
     traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
+    system_hints = _python_pre_processor(burp_requests)
     return RED_TEAMER_PROMPT.format(
         knowledge_context=knowledge_context,
+        system_hints=system_hints,
         traffic_context=traffic_context,
     )
 

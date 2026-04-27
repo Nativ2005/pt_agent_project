@@ -46,6 +46,7 @@ def parse_burp_xml(xml_path: Path) -> list[BurpRequest]:
         path_el = item.find("path")
         method_el = item.find("method")
         request_el = item.find("request")
+        response_el = item.find("response")
 
         host = host_el.text or "" if host_el is not None else ""
         path = path_el.text or "/" if path_el is not None else "/"
@@ -72,6 +73,16 @@ def parse_burp_xml(xml_path: Path) -> list[BurpRequest]:
                     k, _, v = line.partition(": ")
                     headers[k] = v
 
+        # Extract response body (split off HTTP response headers).
+        resp_b64 = response_el is not None and response_el.attrib.get("base64") == "true"
+        raw_response = _decode(
+            response_el.text if response_el is not None else None, resp_b64
+        )
+        response_body = ""
+        if raw_response:
+            resp_parts = raw_response.split("\r\n\r\n", 1)
+            response_body = resp_parts[1] if len(resp_parts) > 1 else ""
+
         results.append(
             BurpRequest(
                 host=host,
@@ -79,6 +90,7 @@ def parse_burp_xml(xml_path: Path) -> list[BurpRequest]:
                 method=method.upper(),
                 headers=headers,
                 body=body,
+                response_body=response_body,
             )
         )
 

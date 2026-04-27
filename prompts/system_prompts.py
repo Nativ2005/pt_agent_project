@@ -28,6 +28,11 @@ Specific Vulnerability Knowledge:
 {knowledge_context}
 </knowledge>
 
+Python Pre-Processor Results:
+<system_hints>
+{system_hints}
+</system_hints>
+
 Traffic to analyze:
 <evidence>
 {traffic_context}

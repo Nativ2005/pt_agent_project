@@ -13,6 +13,7 @@ class BurpRequest(BaseModel):
     method: str
     headers: dict[str, str] = {}
     body: str = ""
+    response_body: str = ""  # raw HTML/text response body captured by Burp
 
     @field_validator("method")
     @classmethod

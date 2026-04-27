@@ -9,32 +9,29 @@ YOUR TASK — PASSIVE TRAFFIC ANALYSIS ONLY:
 You are analyzing a captured HTTP request/response pair. You must reason through the following steps methodically. Do NOT apply SQL injection logic. Do NOT flag JSON API responses. This heuristic is exclusively for HTML responses.
 
 ─────────────────────────────────────────────
-STEP 1 — INPUT HARVESTING & NORMALIZATION (MANDATORY)
+STEP 1 — CHECK THE PYTHON PRE-PROCESSOR HINTS (MANDATORY FIRST STEP)
 ─────────────────────────────────────────────
-Physically list EVERY user-controlled value in the request:
-  - URL query parameters (e.g., ?search=FOOBAR)
-  - URL path segments (e.g., /items/FOOBAR)
-  - POST body parameters (e.g., q=FOOBAR)
-  - HTTP headers that are application-defined (e.g., X-Search-Term: FOOBAR)
+Before doing ANYTHING else, read the <system_hints> block in your prompt.
 
-YOU MUST URL-DECODE EVERY VALUE BEFORE PROCEEDING.
-Browsers always decode before rendering — you must match what the browser sees,
-not what the wire carries. Apply these substitutions to every parameter value:
-  %22 → "     %3E → >     %3C → <     %27 → '     %2F → /
-  %28 → (     %29 → )     %3B → ;     %3D → =     %26 → &
-  %20 or + → (space)
+Python has already done the exact string search for you. It URL-decoded every
+parameter and searched the response body with perfect precision.
 
-Example: if the raw request contains ?q=%22%3E%3Cscript%3E, the normalized
-value you must search for is: "><script>
+CASE A — A "PYTHON PRE-PROCESSOR ALERT" is present:
+  Python has confirmed a reflection. You MUST use the provided "Context Snippet"
+  as your primary evidence. Do NOT attempt to scan the full HTML yourself.
+  Proceed directly to Step 2 using the snippet Python gave you.
 
-Record BOTH the raw encoded form AND the decoded form for each parameter.
-All subsequent steps operate on the DECODED values only.
+CASE B — The hints say "No parameter reflections detected":
+  Python found no exact match. You may note this as context, but do NOT
+  override it by claiming you found a reflection. Proceed to Step 3 to
+  assess Investigation Leads based on the request structure only.
 
 ─────────────────────────────────────────────
-STEP 2 — REFLECTION HUNTING IN THE RESPONSE
+STEP 2 — REFLECTION CONTEXT IDENTIFICATION (only if Python found a match)
 ─────────────────────────────────────────────
-For EACH decoded parameter value, search the HTML response body for that
-decoded string. Do NOT search for the percent-encoded version.
+Using ONLY the Python-provided snippet, identify which of the 5 contexts
+the reflected value lands in. The correct context determines the action plan:
+
 If found, identify the precise syntactic context. There are exactly 5 contexts
 you must distinguish — the correct one determines the action plan:
 
@@ -59,11 +56,11 @@ you must distinguish — the correct one determines the action plan:
     Risk: Template expression injection. Characters to test: ${ } ` \
 
 ─────────────────────────────────────────────
-STEP 3 — ENCODING ANALYSIS (CLASSIFICATION GATE)
+STEP 3 — ENCODING ANALYSIS ON THE SNIPPET (CLASSIFICATION GATE)
 ─────────────────────────────────────────────
-Using the DECODED parameter value from Step 1, examine how the application
-renders it in the HTML response. You are checking whether the server applied
-HTML output encoding AFTER receiving the decoded input.
+Using ONLY the Python-provided snippet (not the full HTML), examine how the
+application rendered the reflected value. You are checking whether the server
+applied HTML output encoding AFTER receiving the decoded input.
 
   RAW (no HTML encoding applied) — decoded special characters appear intact:
     < stays <    > stays >    " stays "    ' stays '
@@ -89,6 +86,7 @@ HTML output encoding AFTER receiving the decoded input.
 ─────────────────────────────────────────────
 STEP 4 — CLASSIFICATION RULES
 ─────────────────────────────────────────────
+Base your classification on the Python snippet, not on assumptions.
 VERIFIED HIGH FINDING — ALL of these must be true:
   ✓ A specific user-controlled parameter value is reflected in the HTML response.
   ✓ The reflection is in an HTML response (Content-Type: text/html).
@@ -97,16 +95,16 @@ VERIFIED HIGH FINDING — ALL of these must be true:
   → Quote the EXACT evidence snippet from the response body.
 
 INVESTIGATION LEAD — ANY of these is true:
-  • The parameter looks injectable but the response body is unavailable.
-  • Encoding is present but may be incomplete or bypassable.
+  • Python found NO reflection (hints say "No parameter reflections detected")
+    but the parameter name/path strongly suggests rendering potential.
+  • Python found a reflection but encoding is present or ambiguous in the snippet.
   • The reflection is inside a JavaScript context — encoding rules differ from HTML.
-  • The URL or parameter strongly suggests rendering (e.g., /search?q=, /error?msg=)
-    but no response is captured.
+  • No response body was captured at all.
 
 DO NOT REPORT — if ANY of these is true:
+  • Python found no reflection AND the request/response gives no structural signal.
   • The response Content-Type is application/json or application/xml.
-  • The parameter value does not appear anywhere in the response.
-  • All special characters are consistently and correctly encoded.
+  • The Python snippet shows all special characters are correctly HTML-encoded.
 
 ─────────────────────────────────────────────
 STEP 5 — CONTEXT-SPECIFIC ACTION PLANS
