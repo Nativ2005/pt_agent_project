@@ -124,6 +124,47 @@ async def test_generate_analysis_raises_on_read_timeout(client: OllamaClient) ->
 
 
 # ---------------------------------------------------------------------------
+# ping() tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ping_returns_version_dict(client: OllamaClient) -> None:
+    """ping() returns the JSON payload from /api/version."""
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={"version": "0.1.32"})
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    mock_client_ctx = MagicMock()
+    mock_client_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client_ctx):
+        result = await client.ping()
+
+    assert result == {"version": "0.1.32"}
+    called_url: str = mock_client.get.call_args[0][0]
+    assert "/api/version" in called_url
+    assert "localhost" in called_url
+
+
+@pytest.mark.asyncio
+async def test_ping_raises_on_connect_error(client: OllamaClient) -> None:
+    """ping() raises OllamaConnectionError when Ollama is not running."""
+    mock_client_ctx = MagicMock()
+    mock_client_ctx.__aenter__ = AsyncMock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+    mock_client_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client_ctx):
+        with pytest.raises(OllamaConnectionError, match="ollama serve"):
+            await client.ping()
+
+
+# ---------------------------------------------------------------------------
 # Configuration tests
 # ---------------------------------------------------------------------------
 
