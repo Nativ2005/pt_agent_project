@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import AsyncIterator, Sequence
 
 from core.knowledge import VULN_KNOWLEDGE_BASE
@@ -37,6 +38,29 @@ def _get_knowledge_context(signal: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# <analysis> block stripper
+# ---------------------------------------------------------------------------
+
+_ANALYSIS_RE = re.compile(
+    r"<analysis>.*?</analysis>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_analysis_block(text: str) -> str:
+    """Remove the LLM's internal <analysis>…</analysis> chain-of-thought block.
+
+    The block is useful for prompting deterministic reasoning but should never
+    reach the end-user — only the Markdown report sections are shown.
+    Strips the block plus any leading blank lines left behind.
+    """
+    cleaned = _ANALYSIS_RE.sub("", text)
+    # Collapse multiple blank lines that the removal may leave behind.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.lstrip("\n")
+
+
+# ---------------------------------------------------------------------------
 # Traffic serialiser (shared between analyze / analyze_stream)
 # ---------------------------------------------------------------------------
 
@@ -47,10 +71,11 @@ def _build_traffic_context(
     """Serialise all parsed input into a compact, readable traffic string."""
     sections: list[str] = []
 
-    for i, req in enumerate(burp_requests, start=1):
-        lines = [f"### Request {i}: {req.method} {req.host}{req.path}"]
+    for req in burp_requests:
+        # Label by Verb + Path so the LLM never needs to use generic numbers.
+        label = f"{req.method} {req.path}"
+        lines = [f"### {label}"]
         lines.append(f"Host: {req.host}")
-        lines.append(f"Method: {req.method}  Path: {req.path}")
 
         if req.headers:
             lines.append("Headers:")
@@ -66,7 +91,7 @@ def _build_traffic_context(
         else:
             lines.append("Body: (empty)")
 
-        sections.append("\n".join(lines))
+        sections.append("\n".join(lines))  # label already set above
 
     if swagger_endpoints:
         ep_lines = [f"### API Surface ({len(swagger_endpoints)} endpoint(s))"]
@@ -143,22 +168,44 @@ class AuraAnalyzer:
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> str:
-        """Run the full PT analysis and return a Markdown report string."""
+        """Run the full PT analysis and return a cleaned Markdown report."""
         prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
-        return await self._client.generate_analysis(
+        raw = await self._client.generate_analysis(
             system_prompt="",
             context_data=prompt,
         )
+        return _strip_analysis_block(raw)
 
     async def analyze_stream(
         self,
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the PT analysis token-by-token."""
+        """Stream the PT analysis, suppressing the <analysis> block entirely.
+
+        Tokens are buffered until the closing </analysis> tag is confirmed,
+        then the Markdown report is streamed token-by-token from that point on.
+        """
         prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
+
+        buffer = ""
+        past_analysis = False
+
         async for token in self._client.generate_analysis_stream(
             system_prompt="",
             context_data=prompt,
         ):
-            yield token
+            if past_analysis:
+                yield token
+                continue
+
+            buffer += token
+
+            # Check if we've received the closing tag yet.
+            if "</analysis>" in buffer.lower():
+                past_analysis = True
+                # Emit everything after the closing tag.
+                after = _ANALYSIS_RE.sub("", buffer).lstrip("\n")
+                if after:
+                    yield after
+                buffer = ""
