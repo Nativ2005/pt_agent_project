@@ -9,31 +9,59 @@ YOUR TASK — PASSIVE TRAFFIC ANALYSIS ONLY:
 You are analyzing a captured HTTP request/response pair. You must reason through the following steps methodically. Do NOT apply SQL injection logic. Do NOT flag JSON API responses. This heuristic is exclusively for HTML responses.
 
 ─────────────────────────────────────────────
-STEP 1 — CHECK THE PYTHON PRE-PROCESSOR HINTS (MANDATORY FIRST STEP)
+STEP 1 — READ THE PYTHON PRE-PROCESSOR HINT (MANDATORY FIRST STEP)
 ─────────────────────────────────────────────
-Before doing ANYTHING else, read the <system_hints> block in your prompt.
+Before doing ANYTHING else, read the <system_hints> block.
 
-Python has already done the exact string search for you. It URL-decoded every
-parameter and searched the response body with perfect precision.
+Python used a "Canary Anchoring" strategy:
+  - It extracted the alphanumeric core of the input (the "anchor term").
+  - It searched for that anchor case-insensitively in the response.
+  - Special characters are intentionally excluded from the search
+    because they may be mutated (encoded, dropped, escaped) by the server.
 
 CASE A — A "PYTHON PRE-PROCESSOR ALERT" is present:
-  Python has confirmed a reflection. You MUST use the provided "Context Snippet"
-  as your primary evidence. Do NOT attempt to scan the full HTML yourself.
-  Proceed directly to Step 2 using the snippet Python gave you.
+  Python found the anchor term in the response. Read the snippet carefully.
+  Locate the anchor inside the snippet. Then proceed to Step 2.
 
-CASE B — The hints say "No parameter reflections detected":
-  Python found no exact match. You may note this as context, but do NOT
-  override it by claiming you found a reflection. Proceed to Step 3 to
-  assess Investigation Leads based on the request structure only.
+CASE B — "No anchor reflections detected":
+  The alphanumeric core itself did not appear in the response.
+  The input was NOT reflected in any recoverable form.
+  Do NOT claim a reflection exists. Proceed to Step 3 for lead assessment only.
 
 ─────────────────────────────────────────────
-STEP 2 — REFLECTION CONTEXT IDENTIFICATION (only if Python found a match)
+STEP 2 — VULNERABILITY GATE: WHAT HAPPENED TO THE SPECIAL CHARACTERS?
+─────────────────────────────────────────────
+You have the Python snippet. Locate the anchor term inside it.
+Now examine the characters immediately BEFORE and AFTER the anchor:
+
+CASE: Special characters appear RAW and UNENCODED around the anchor
+  Example: the input was `Aura">` and the snippet shows: value="Aura">
+  The " and > survived. The server did not sanitize.
+  → 🔴 VERIFIED HIGH. Proceed to Step 3 to identify the exact context (A–E).
+
+CASE: Special characters are HTML-encoded around the anchor
+  Example: snippet shows: <div>Aura&quot;&gt;</div>
+  The server encoded " → &quot; and > → &gt;. Sanitization is present.
+  → 🟡 INVESTIGATION LEAD. Note which characters were encoded.
+
+CASE: Special characters are JSON-encoded around the anchor
+  Example: snippet shows: {"msg": "Aura>"}
+  > is the JSON encoding of >. May still be exploitable in JS context.
+  → 🟡 INVESTIGATION LEAD. Note the JS context risk.
+
+CASE: Special characters are completely absent around the anchor
+  Example: snippet shows: <div>Aura</div> (input was `Aura">`)
+  The server stripped the special characters entirely.
+  → 🟡 INVESTIGATION LEAD. Stripping is not always safe — test bypass payloads.
+
+─────────────────────────────────────────────
+STEP 3 — REFLECTION CONTEXT IDENTIFICATION (only when Step 2 → VERIFIED HIGH)
 ─────────────────────────────────────────────
 Using ONLY the Python-provided snippet, identify which of the 5 contexts
 the reflected value lands in. The correct context determines the action plan:
 
-If found, identify the precise syntactic context. There are exactly 5 contexts
-you must distinguish — the correct one determines the action plan:
+There are exactly 5 contexts you must distinguish — the correct one determines
+the action plan:
 
   CONTEXT A — Between HTML tags (raw HTML body):
     Evidence pattern: <div>USER_VALUE</div> or <p>USER_VALUE</p>

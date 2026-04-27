@@ -82,12 +82,34 @@ def _make_snippet(haystack: str, match_start: int, match_len: int) -> str:
     return f"{prefix}{haystack[start:end]}{suffix}"
 
 
-def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
-    """Search every decoded parameter value inside the captured response body.
+def _extract_anchor(decoded_val: str) -> str:
+    """Extract only the alphanumeric characters from a decoded value.
 
-    Returns a formatted <system_hints> content string describing every match
-    found, or a single 'no matches' line if nothing was found.
-    Python does the exact string search so the LLM never has to.
+    This 'canary' survives mutations the payload itself may not:
+    case changes, HTML/JSON encoding, and partial reflection all leave
+    the alphabetic core intact. Searching for it is far more robust
+    than searching for the full payload.
+
+    Returns an empty string if fewer than 3 alphanumeric chars exist
+    (too short to be a meaningful anchor — would cause false positives).
+    """
+    anchor = re.sub(r"[^a-zA-Z0-9]", "", decoded_val)
+    return anchor if len(anchor) >= 3 else ""
+
+
+def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
+    """Canary-Anchoring Pre-Processor: search for the alphanumeric core of each
+    parameter value inside the captured response body (case-insensitive).
+
+    Strategy:
+      1. Decode every parameter value.
+      2. Strip non-alphanumeric chars → anchor_term.
+      3. Case-insensitive search for anchor_term in response_body.
+      4. Extract a 75-char snippet around the match.
+      5. Emit a structured hint telling the LLM exactly what Python found
+         and asking it to reason about what happened to the special chars.
+
+    Falls back to "no match" message when anchor is too short or absent.
     """
     hints: list[str] = []
 
@@ -97,26 +119,37 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 
         params = _extract_params(req)
         endpoint = f"{req.method} {req.path}"
+        response_lower = req.response_body.lower()
 
         for param, decoded_val in params.items():
-            if len(decoded_val) < 2:  # skip trivially short values (e.g., "1")
+            anchor = _extract_anchor(decoded_val)
+
+            # Fallback: anchor too short — skip to avoid noise.
+            if not anchor:
                 continue
 
-            idx = req.response_body.find(decoded_val)
+            idx = response_lower.find(anchor.lower())
             if idx == -1:
                 continue
 
-            snippet = _make_snippet(req.response_body, idx, len(decoded_val))
+            snippet = _make_snippet(req.response_body, idx, len(anchor))
             hints.append(
                 f"PYTHON PRE-PROCESSOR ALERT [{endpoint}]\n"
-                f"  Parameter : '{param}'\n"
-                f"  Decoded value : '{decoded_val}'\n"
-                f"  Status : FOUND IN RESPONSE BODY\n"
-                f"  Context Snippet : `{snippet}`"
+                f"  Parameter     : '{param}'\n"
+                f"  Full decoded input : '{decoded_val}'\n"
+                f"  Anchor term   : '{anchor}' (alphanumeric core of the input)\n"
+                f"  Anchor status : FOUND IN RESPONSE (case-insensitive)\n"
+                f"  Snippet       : `{snippet}`\n"
+                f"  YOUR TASK     : Locate the anchor '{anchor}' inside the snippet.\n"
+                f"                  Examine the characters IMMEDIATELY surrounding it.\n"
+                f"                  Did the special characters from the full input\n"
+                f"                  (e.g., {[c for c in decoded_val if not c.isalnum()]})\n"
+                f"                  survive RAW, get HTML-encoded (&lt; &gt; &quot;),\n"
+                f"                  get JSON-encoded (\\u003e), or were they dropped?"
             )
 
     if not hints:
-        return "No parameter reflections detected by Python pre-processor."
+        return "No anchor reflections detected by Python pre-processor."
 
     return "\n\n".join(hints)
 
