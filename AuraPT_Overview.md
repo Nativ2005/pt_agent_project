@@ -57,7 +57,9 @@ pytest-mock>=3.12
 
 ### `main.py` — נקודת הכניסה
 
-ה-CLI מוגדר עם שני סוגי פרמטרים:
+ה-CLI כולל שתי פקודות:
+
+#### פקודה `scan`
 
 | פרמטר | חובה? | ערכים | תיאור |
 |-------|--------|-------|-------|
@@ -65,14 +67,37 @@ pytest-mock>=3.12
 | `--burp` | אופציונלי | נתיב לקובץ | קובץ XML מיוצא מ-Burp Suite |
 | `--swagger` | אופציונלי | נתיב לקובץ | קובץ OpenAPI/Swagger (JSON או YAML) |
 
-**דוגמאות שימוש:**
 ```bash
-python main.py --env dev --burp capture.xml
-python main.py --env prod --swagger api.yaml
-python main.py --env dev --burp capture.xml --swagger api.json
+python main.py scan --env dev --burp capture.xml
+python main.py scan --env prod --swagger api.yaml
 ```
 
-אם לא מסופק אף קובץ — הכלי יוצא עם שגיאה ו-exit code 1.
+#### פקודה `test-connection`
+
+בודקת שה-Ollama daemon פעיל ומציגה את המודלים הזמינים מקומית.
+
+| פרמטר | ברירת מחדל | תיאור |
+|-------|------------|-------|
+| `--model` | `llama3` | המודל לבדיקה |
+| `--host` | `http://localhost:11434` | כתובת Ollama |
+
+```bash
+python main.py test-connection
+python main.py test-connection --model mistral --host http://localhost:11434
+```
+
+**פלט לדוגמה:**
+```
+[AuraPT] Pinging Ollama at http://localhost:11434 ...
+  Ollama is UP  (version: 0.1.32)
+[AuraPT] Fetching locally available models ...
+  3 model(s) available:
+   * llama3:latest
+     mistral:latest
+     codellama:latest
+```
+
+אם Ollama לא פעיל — מוצגת שגיאה בצבע אדום ו-exit code 1.
 
 ---
 
@@ -146,6 +171,9 @@ class SwaggerEndpoint(BaseModel):
 **מתודות ציבוריות:**
 
 ```python
+# בדיקת חיבור — מחזיר {"version": "0.1.32"} או זורק OllamaConnectionError
+await client.ping() -> dict[str, str]
+
 # ניתוח PT — מקבל system prompt + נתוני context, מחזיר string
 await client.generate_analysis(system_prompt, context_data) -> str
 
@@ -241,7 +269,7 @@ burp_parser.py         swagger_parser.py
 | `core/ollama_client.py` | ✅ הושלם | Async bridge ל-Ollama עם error handling |
 | `tests/test_ollama_client.py` | ✅ הושלם | Unit tests מלאים עם mocking |
 | Prompt templates | ⏳ בתור | בניית פרומפטים מ-BurpRequest / SwaggerEndpoint |
-| חיבור ל-main.py | ⏳ בתור | קריאה ל-OllamaClient מתוך ה-CLI |
+| `test-connection` command | ✅ הושלם | פינג ל-Ollama + רשימת מודלים ב-CLI |
 | דוח פלט | ⏳ בתור | ייצוא ממצאים ל-JSON / Markdown |
 | `--model` flag | ⏳ בתור | בחירת מודל Ollama (llama3, mistral, וכו') |
 | טסטים לפרסרים | ⏳ בתור | unit tests ל-burp_parser ו-swagger_parser |

@@ -82,6 +82,29 @@ class OllamaClient:
                 "Try a smaller model or increase read_timeout."
             ) from exc
 
+    async def ping(self) -> dict[str, str]:
+        """Check that Ollama is reachable and return its version info.
+
+        Uses the lightweight /api/version endpoint — no model is loaded.
+
+        Returns:
+            Dict with at least a "version" key, e.g. {"version": "0.1.32"}.
+
+        Raises:
+            OllamaConnectionError: If Ollama is not running on localhost.
+        """
+        version_url = self._url.replace(_GENERATE_PATH, "/api/version")
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(version_url)
+                response.raise_for_status()
+                return response.json()
+        except httpx.ConnectError as exc:
+            raise OllamaConnectionError(
+                f"Cannot reach Ollama at {version_url}. "
+                "Make sure `ollama serve` is running."
+            ) from exc
+
     async def list_models(self) -> list[str]:
         """Return the names of locally available Ollama models."""
         tags_url = self._url.replace(_GENERATE_PATH, "/api/tags")

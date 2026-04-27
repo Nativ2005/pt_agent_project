@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import typer
 
+from core.ollama_client import OllamaClient, OllamaConnectionError
 from parsers.burp_parser import parse_burp_xml
 from parsers.swagger_parser import parse_swagger_file
 
@@ -49,6 +51,56 @@ def scan(
     if swagger:
         endpoints = parse_swagger_file(swagger)
         typer.echo(f"[swagger] parsed {len(endpoints)} endpoint(s) from {swagger}")
+
+
+@app.command("test-connection")
+def test_connection(
+    model: str = typer.Option("llama3", "--model", help="Ollama model name to verify."),
+    host: str = typer.Option("http://localhost:11434", "--host", help="Ollama base URL."),
+) -> None:
+    """Verify that the local Ollama daemon is reachable and list available models."""
+
+    async def _run() -> None:
+        client = OllamaClient(model=model, base_url=host)
+
+        typer.echo(f"[AuraPT] Pinging Ollama at {host} ...")
+        try:
+            info = await client.ping()
+            typer.echo(
+                typer.style(
+                    f"  Ollama is UP  (version: {info.get('version', 'unknown')})",
+                    fg=typer.colors.GREEN,
+                    bold=True,
+                )
+            )
+        except OllamaConnectionError as exc:
+            typer.echo(
+                typer.style(f"  Ollama is DOWN — {exc}", fg=typer.colors.RED, bold=True),
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        typer.echo("[AuraPT] Fetching locally available models ...")
+        try:
+            models = await client.list_models()
+        except OllamaConnectionError as exc:
+            typer.echo(typer.style(f"  Could not list models: {exc}", fg=typer.colors.YELLOW))
+            return
+
+        if not models:
+            typer.echo(
+                typer.style(
+                    "  No models found. Run: ollama pull llama3",
+                    fg=typer.colors.YELLOW,
+                )
+            )
+        else:
+            typer.echo(typer.style(f"  {len(models)} model(s) available:", fg=typer.colors.CYAN))
+            for m in models:
+                marker = " *" if m.startswith(model) else "  "
+                typer.echo(f"   {marker} {m}")
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
