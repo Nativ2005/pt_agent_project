@@ -32,4 +32,6 @@ Traffic to analyze:
 <evidence>
 {traffic_context}
 </evidence>
+
+CRITICAL: Do NOT put your final Markdown report inside the <analysis> tags. The <analysis> tags are for your internal thoughts only. Your final report MUST start after the </analysis> tag.
 """

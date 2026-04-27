@@ -42,7 +42,7 @@ def _get_knowledge_context(signal: str) -> str:
 # ---------------------------------------------------------------------------
 
 _ANALYSIS_RE = re.compile(
-    r"<analysis>.*?</analysis>",
+    r"<analysis>.*?(</analysis>|$)",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -50,14 +50,15 @@ _ANALYSIS_RE = re.compile(
 def _strip_analysis_block(text: str) -> str:
     """Remove the LLM's internal <analysis>…</analysis> chain-of-thought block.
 
-    The block is useful for prompting deterministic reasoning but should never
-    reach the end-user — only the Markdown report sections are shown.
-    Strips the block plus any leading blank lines left behind.
+    Uses |$ so an unclosed tag doesn't swallow the entire response.
     """
+    print(f"[DEBUG] Raw LLM Response length: {len(text)} characters")
     cleaned = _ANALYSIS_RE.sub("", text)
-    # Collapse multiple blank lines that the removal may leave behind.
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.lstrip("\n")
+    cleaned = cleaned.lstrip("\n")
+    if not cleaned.strip():
+        print("[!] Analysis completed, but no Markdown report was generated outside the analysis block.")
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -190,22 +191,37 @@ class AuraAnalyzer:
 
         buffer = ""
         past_analysis = False
+        all_tokens: list[str] = []
 
         async for token in self._client.generate_analysis_stream(
             system_prompt="",
             context_data=prompt,
         ):
+            all_tokens.append(token)
+
             if past_analysis:
                 yield token
                 continue
 
             buffer += token
 
-            # Check if we've received the closing tag yet.
-            if "</analysis>" in buffer.lower():
+            # Transition: closing tag found OR LLM wrote ## (report started without closing tag).
+            closing_found = "</analysis>" in buffer.lower()
+            report_started = not closing_found and "##" in buffer and "<analysis>" in buffer.lower()
+
+            if closing_found or report_started:
                 past_analysis = True
-                # Emit everything after the closing tag.
                 after = _ANALYSIS_RE.sub("", buffer).lstrip("\n")
+                if not after.strip():
+                    print("[!] Analysis completed, but no Markdown report was generated outside the analysis block.")
                 if after:
                     yield after
                 buffer = ""
+
+        # If the LLM never opened an <analysis> block at all, emit everything.
+        if not past_analysis:
+            full = "".join(all_tokens)
+            print(f"[DEBUG] Raw LLM Response length: {len(full)} characters")
+            result = _strip_analysis_block(full)
+            if result:
+                yield result
