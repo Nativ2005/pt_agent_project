@@ -9,7 +9,7 @@ YOUR TASK — PASSIVE TRAFFIC ANALYSIS ONLY:
 You are analyzing a captured HTTP request/response pair. You must reason through the following steps methodically. Do NOT apply SQL injection logic. Do NOT flag JSON API responses. This heuristic is exclusively for HTML responses.
 
 ─────────────────────────────────────────────
-STEP 1 — INPUT HARVESTING
+STEP 1 — INPUT HARVESTING & NORMALIZATION (MANDATORY)
 ─────────────────────────────────────────────
 Physically list EVERY user-controlled value in the request:
   - URL query parameters (e.g., ?search=FOOBAR)
@@ -17,12 +17,24 @@ Physically list EVERY user-controlled value in the request:
   - POST body parameters (e.g., q=FOOBAR)
   - HTTP headers that are application-defined (e.g., X-Search-Term: FOOBAR)
 
-For each value, note its exact string, including all special characters.
+YOU MUST URL-DECODE EVERY VALUE BEFORE PROCEEDING.
+Browsers always decode before rendering — you must match what the browser sees,
+not what the wire carries. Apply these substitutions to every parameter value:
+  %22 → "     %3E → >     %3C → <     %27 → '     %2F → /
+  %28 → (     %29 → )     %3B → ;     %3D → =     %26 → &
+  %20 or + → (space)
+
+Example: if the raw request contains ?q=%22%3E%3Cscript%3E, the normalized
+value you must search for is: "><script>
+
+Record BOTH the raw encoded form AND the decoded form for each parameter.
+All subsequent steps operate on the DECODED values only.
 
 ─────────────────────────────────────────────
 STEP 2 — REFLECTION HUNTING IN THE RESPONSE
 ─────────────────────────────────────────────
-For EACH harvested value, search the HTML response body for its exact string.
+For EACH decoded parameter value, search the HTML response body for that
+decoded string. Do NOT search for the percent-encoded version.
 If found, identify the precise syntactic context. There are exactly 5 contexts
 you must distinguish — the correct one determines the action plan:
 
@@ -49,20 +61,30 @@ you must distinguish — the correct one determines the action plan:
 ─────────────────────────────────────────────
 STEP 3 — ENCODING ANALYSIS (CLASSIFICATION GATE)
 ─────────────────────────────────────────────
-Examine whether the reflected value is HTML-encoded or raw:
+Using the DECODED parameter value from Step 1, examine how the application
+renders it in the HTML response. You are checking whether the server applied
+HTML output encoding AFTER receiving the decoded input.
 
-  RAW (unencoded) — the value appears exactly as submitted:
+  RAW (no HTML encoding applied) — decoded special characters appear intact:
     < stays <    > stays >    " stays "    ' stays '
-    → This is VERIFIED HIGH. Characters survive into a dangerous context.
+    → The server received the decoded value and reflected it without sanitization.
+    → This is 🔴 VERIFIED HIGH. Quote the exact response snippet as evidence.
+    → Explain which context (A–E) the reflection lands in and why it is exploitable.
 
-  ENCODED (safe encoding present):
+  HTML-ENCODED (server sanitized correctly):
     < becomes &lt;    > becomes &gt;    " becomes &quot;    ' becomes &#x27;
-    → This is an INVESTIGATION LEAD. Encoding may be incomplete — note it
-      but do NOT classify as Verified.
+    → This is 🟡 INVESTIGATION LEAD. Encoding is present but may be incomplete
+      or context-specific. Do NOT classify as Verified.
 
   PARTIAL or AMBIGUOUS — some characters encoded, others not:
-    → Treat as INVESTIGATION LEAD and note which specific characters
-      survived encoding. These are the bypass candidates.
+    → Treat as 🟡 INVESTIGATION LEAD. Explicitly name which characters
+      survived encoding — these are the bypass candidates.
+
+  CRITICAL ANTI-PATTERN — do not make this mistake:
+    If you see %22%3E in the response, that is the server reflecting the
+    percent-encoded form, which is NOT dangerous — the browser will not
+    execute it as HTML. Only flag as VERIFIED if the DECODED characters
+    (i.e., "> not %22%3E) appear raw in the response.
 
 ─────────────────────────────────────────────
 STEP 4 — CLASSIFICATION RULES
