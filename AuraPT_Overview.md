@@ -15,17 +15,21 @@ AuraPT הוא כלי CLI שרץ לגמרי **offline** (air-gapped) ומשתמש
 
 ```
 pt_agent_project/
-├── main.py                  # נקודת כניסה — CLI עם typer
-├── requirements.txt         # תלויות Python
+├── main.py                    # CLI — scan | analyze | test-connection
+├── requirements.txt           # תלויות Python
 ├── .gitignore
 ├── core/
 │   ├── __init__.py
-│   ├── models.py            # מודלי Pydantic (BurpRequest, SwaggerEndpoint)
-│   └── ollama_client.py     # Async bridge ל-Ollama API המקומי
+│   ├── models.py              # מודלי Pydantic (BurpRequest, SwaggerEndpoint)
+│   ├── ollama_client.py       # Async bridge ל-Ollama API המקומי
+│   └── analyzer.py            # AuraAnalyzer — Reasoning Engine
 ├── parsers/
 │   ├── __init__.py
-│   ├── burp_parser.py       # פרסור קבצי Burp Suite XML
-│   └── swagger_parser.py    # פרסור קבצי OpenAPI / Swagger
+│   ├── burp_parser.py         # פרסור קבצי Burp Suite XML
+│   └── swagger_parser.py      # פרסור קבצי OpenAPI / Swagger
+├── prompts/
+│   ├── __init__.py
+│   └── system_prompts.py      # RED_TEAMER_PROMPT + env modifiers
 └── tests/
     └── test_ollama_client.py  # Unit tests ל-OllamaClient
 ```
@@ -268,11 +272,13 @@ burp_parser.py         swagger_parser.py
 |-----|--------|-------|
 | `core/ollama_client.py` | ✅ הושלם | Async bridge ל-Ollama עם error handling |
 | `tests/test_ollama_client.py` | ✅ הושלם | Unit tests מלאים עם mocking |
-| Prompt templates | ⏳ בתור | בניית פרומפטים מ-BurpRequest / SwaggerEndpoint |
+| `prompts/system_prompts.py` | ✅ הושלם | RED_TEAMER_PROMPT עם OWASP / JWT / BOLA / Mass Assignment + env modifiers |
+| `core/analyzer.py` | ✅ הושלם | AuraAnalyzer — Reasoning Engine מלא |
+| `analyze` CLI command | ✅ הושלם | rich output, spinner, `--output` לשמירת דוח |
 | `test-connection` command | ✅ הושלם | פינג ל-Ollama + רשימת מודלים ב-CLI |
-| דוח פלט | ⏳ בתור | ייצוא ממצאים ל-JSON / Markdown |
-| `--model` flag | ⏳ בתור | בחירת מודל Ollama (llama3, mistral, וכו') |
+| `--model` flag | ✅ הושלם | `--model llama3:latest` בכל command |
 | טסטים לפרסרים | ⏳ בתור | unit tests ל-burp_parser ו-swagger_parser |
+| prompt engineering iteration | ⏳ בתור | כוונון הפרומפט לפי תוצאות אמיתיות |
 
 ---
 
