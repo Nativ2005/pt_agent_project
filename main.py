@@ -7,9 +7,9 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.style import Style
 
 from core.analyzer import AuraAnalyzer
@@ -85,15 +85,19 @@ def analyze(
         "http://localhost:11434", "--host",
         help="Ollama base URL (must be localhost for air-gapped operation).",
     ),
+    timeout: float = typer.Option(
+        600.0, "--timeout",
+        help="Read timeout in seconds. Increase for slow hardware or large models.",
+    ),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o",
         help="Save the Markdown report to this file path.",
     ),
 ) -> None:
-    """Run a full PT analysis via local Ollama and print a Markdown report.
+    """Run a full PT analysis via local Ollama and stream the Markdown report live.
 
-    Parses --burp and/or --swagger inputs, builds a structured context, sends
-    it to the local model, and renders the resulting report with rich.
+    Parses --burp and/or --swagger inputs, builds a structured context, and
+    streams the model's response token-by-token so you see progress immediately.
     """
     if burp is None and swagger is None:
         console.print("[bold red]Provide at least one of --burp or --swagger.[/bold red]")
@@ -119,35 +123,39 @@ def analyze(
                 f"([dim]{swagger}[/dim])"
             )
 
-        analyzer = AuraAnalyzer(env=env.value, model=model, ollama_base_url=host)
+        analyzer = AuraAnalyzer(
+            env=env.value,
+            model=model,
+            ollama_base_url=host,
+            read_timeout=timeout,
+        )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            transient=True,
-        ) as progress:
-            progress.add_task(
-                description=f"[cyan]Analysing with [bold]{model}[/bold] — this may take a minute...",
-                total=None,
-            )
-            try:
-                report = await analyzer.analyze(
+        console.print(
+            f"\n[cyan]Streaming analysis with [bold]{model}[/bold] "
+            f"(timeout={int(timeout)}s) — output appears as it is generated...[/cyan]\n"
+        )
+        console.print(Panel("[bold white]AuraPT Analysis Report[/bold white]", style="cyan"))
+
+        tokens: list[str] = []
+        accumulated = ""
+
+        try:
+            # Use Live to re-render the growing Markdown in-place.
+            with Live(Markdown(accumulated), console=console, refresh_per_second=8) as live:
+                async for token in analyzer.analyze_stream(
                     burp_requests=burp_requests,
                     swagger_endpoints=swagger_endpoints,
-                )
-            except OllamaConnectionError as exc:
-                console.print(f"\n[bold red]Ollama unreachable:[/bold red] {exc}")
-                raise typer.Exit(code=1)
+                ):
+                    tokens.append(token)
+                    accumulated += token
+                    live.update(Markdown(accumulated))
+        except OllamaConnectionError as exc:
+            console.print(f"\n[bold red]Ollama unreachable:[/bold red] {exc}")
+            raise typer.Exit(code=1)
 
-        return report
+        return accumulated
 
     report_md = asyncio.run(_run())
-
-    # Render to console
-    console.print("\n")
-    console.print(Panel("[bold white]AuraPT Analysis Report[/bold white]", style="cyan"))
-    console.print(Markdown(report_md))
 
     # Optionally save to file
     if output:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Sequence
+from typing import AsyncIterator, Sequence
 
 from core.models import BurpRequest, SwaggerEndpoint
 from core.ollama_client import OllamaClient
@@ -22,9 +22,14 @@ class AuraAnalyzer:
         env: str = "dev",
         model: str = _DEFAULT_MODEL,
         ollama_base_url: str = "http://localhost:11434",
+        read_timeout: float = 600.0,
     ) -> None:
         self.env = env
-        self._client = OllamaClient(model=model, base_url=ollama_base_url)
+        self._client = OllamaClient(
+            model=model,
+            base_url=ollama_base_url,
+            read_timeout=read_timeout,
+        )
         self._system_prompt = get_system_prompt(env)
 
     # ------------------------------------------------------------------
@@ -36,20 +41,25 @@ class AuraAnalyzer:
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> str:
-        """Run the full PT analysis and return a Markdown report.
-
-        Args:
-            burp_requests:     Parsed Burp Suite requests.
-            swagger_endpoints: Parsed Swagger / OpenAPI endpoints.
-
-        Returns:
-            Markdown-formatted penetration testing report.
-        """
+        """Run the full PT analysis and return a Markdown report."""
         context = self._build_context(burp_requests or [], swagger_endpoints or [])
         return await self._client.generate_analysis(
             system_prompt=self._system_prompt,
             context_data=context,
         )
+
+    async def analyze_stream(
+        self,
+        burp_requests: Sequence[BurpRequest] | None = None,
+        swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream the PT analysis token-by-token as it is generated."""
+        context = self._build_context(burp_requests or [], swagger_endpoints or [])
+        async for token in self._client.generate_analysis_stream(
+            system_prompt=self._system_prompt,
+            context_data=context,
+        ):
+            yield token
 
     # ------------------------------------------------------------------
     # Context serialisation

@@ -9,7 +9,7 @@ _DEFAULT_BASE_URL = "http://localhost:11434"
 _GENERATE_PATH = "/api/generate"
 _DEFAULT_MODEL = "llama3"
 _CONNECT_TIMEOUT = 5.0
-_READ_TIMEOUT = 120.0
+_READ_TIMEOUT = 600.0  # 10 min — llama3 cold-start on CPU can be slow
 
 
 class OllamaConnectionError(RuntimeError):
@@ -117,6 +117,39 @@ class OllamaClient:
         except httpx.ConnectError as exc:
             raise OllamaConnectionError(
                 "Cannot reach Ollama to list models."
+            ) from exc
+
+    async def generate_analysis_stream(
+        self,
+        system_prompt: str,
+        context_data: str,
+    ) -> AsyncIterator[str]:
+        """Like generate_analysis but yields tokens as they arrive.
+
+        Use this when you want to stream output to the console in real time
+        rather than waiting for the full response.
+
+        Raises:
+            OllamaConnectionError: If Ollama is not running or times out.
+        """
+        payload = {
+            "model": self.model,
+            "system": system_prompt,
+            "prompt": context_data,
+            "stream": True,
+        }
+        try:
+            async for token in self._stream(payload):
+                yield token
+        except httpx.ConnectError as exc:
+            raise OllamaConnectionError(
+                f"Cannot reach Ollama at {self._url}. "
+                "Make sure `ollama serve` is running."
+            ) from exc
+        except httpx.ReadTimeout as exc:
+            raise OllamaConnectionError(
+                f"Ollama did not respond within {self._timeout.read}s. "
+                "Try a smaller model or increase --timeout."
             ) from exc
 
     # ------------------------------------------------------------------
