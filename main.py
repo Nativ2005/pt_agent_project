@@ -134,26 +134,45 @@ def analyze(
             f"\n[cyan]Streaming analysis with [bold]{model}[/bold] "
             f"(timeout={int(timeout)}s) — output appears as it is generated...[/cyan]\n"
         )
-        console.print(Panel("[bold white]AuraPT Analysis Report[/bold white]", style="cyan"))
 
-        tokens: list[str] = []
-        accumulated = ""
+        all_reports: list[str] = []
+        total = len(burp_requests)
 
-        try:
-            # Use Live to re-render the growing Markdown in-place.
-            with Live(Markdown(accumulated), console=console, refresh_per_second=8) as live:
-                async for token in analyzer.analyze_stream(
-                    burp_requests=burp_requests,
-                    swagger_endpoints=swagger_endpoints,
-                ):
-                    tokens.append(token)
-                    accumulated += token
-                    live.update(Markdown(accumulated))
-        except OllamaConnectionError as exc:
-            console.print(f"\n[bold red]Ollama unreachable:[/bold red] {exc}")
-            raise typer.Exit(code=1)
+        # ── Per-item loop: one LLM call per Burp request ────────────────────
+        items_to_analyze = burp_requests if burp_requests else [None]
+        for index, req in enumerate(items_to_analyze, start=1):
+            single_batch = [req] if req is not None else []
+            label = f"{req.method} {req.path}" if req is not None else "Swagger-only"
 
-        return accumulated
+            console.print(
+                f"[cyan][[bold]{index}/{total or 1}[/bold]][/cyan] "
+                f"Analyzing [bold]{label}[/bold]..."
+            )
+            print(f"[DEBUG] Processing item {index}/{total or 1}: {label}")
+
+            console.print(Panel("[bold white]AuraPT Analysis Report[/bold white]", style="cyan"))
+            accumulated = ""
+
+            try:
+                with Live(Markdown(accumulated), console=console, refresh_per_second=8) as live:
+                    async for token in analyzer.analyze_stream(
+                        burp_requests=single_batch,
+                        swagger_endpoints=swagger_endpoints,
+                    ):
+                        accumulated += token
+                        live.update(Markdown(accumulated))
+            except OllamaConnectionError as exc:
+                console.print(f"\n[bold red]Ollama unreachable:[/bold red] {exc}")
+                raise typer.Exit(code=1)
+            except Exception as exc:
+                console.print(f"[bold yellow][!] Error on item {index} ({label}): {exc}[/bold yellow]")
+                print(f"[!] Error on item {index}/{total or 1} ({label}): {exc}")
+                continue
+
+            if accumulated.strip():
+                all_reports.append(f"---\n### Item {index}/{total or 1}: {label}\n\n{accumulated}")
+
+        return "\n\n".join(all_reports)
 
     report_md = asyncio.run(_run())
 
