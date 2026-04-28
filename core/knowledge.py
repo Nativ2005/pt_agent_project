@@ -182,7 +182,7 @@ Raw HTML tags in your output will break the Markdown renderer. Always use backti
     "SSRF": {
         "trigger_keywords": [
             "uri", "src", "dest", "destination", "redirect_url",
-            "next", "target", "host", "site", "ref",
+            "next", "target", "site", "ref",
             "return_url", "callback", "webhook", "endpoint", "fetch", "load",
             "open", "file", "proxy", "api_url", "image_url", "link",
         ],

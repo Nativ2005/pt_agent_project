@@ -147,19 +147,42 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
                     if idx == -1:
                         continue
                     snippet = _make_snippet(req.response_body, idx, len(anchor))
+
+                    # Python determines the encoding verdict — do not leave this to the LLM.
+                    special_chars = [c for c in decoded_val if not c.isalnum() and not c.isspace()]
+                    html_entity_map = {
+                        '"': "&quot;", "'": "&#x27;", "<": "&lt;", ">": "&gt;", "&": "&amp;",
+                    }
+                    raw_chars = []
+                    encoded_chars = []
+                    for ch in special_chars:
+                        entity = html_entity_map.get(ch)
+                        if entity and entity in snippet:
+                            encoded_chars.append(f"{ch!r} → {entity}")
+                        else:
+                            raw_chars.append(repr(ch))
+
+                    if raw_chars:
+                        verdict = (
+                            f"⚠️  PYTHON VERDICT: RAW — {', '.join(raw_chars)} appear UNENCODED in the snippet. "
+                            f"The server did NOT sanitize these characters. "
+                            f"This is a 🔴 VERIFIED HIGH XSS. Do NOT say the characters were encoded."
+                        )
+                    elif encoded_chars:
+                        verdict = (
+                            f"✅ PYTHON VERDICT: ENCODED — {', '.join(encoded_chars)}. "
+                            f"The server sanitized the input. Classify as 🟡 Investigation Lead."
+                        )
+                    else:
+                        verdict = "ℹ️  PYTHON VERDICT: Special characters absent from snippet — likely stripped."
+
                     hints.append(
                         f"XSS PRE-PROCESSOR ALERT [{endpoint}]\n"
                         f"  Parameter          : '{param}'\n"
                         f"  Full decoded input : '{decoded_val}'\n"
-                        f"  Anchor term        : '{anchor}' (alphanumeric core of the input)\n"
-                        f"  Anchor status      : FOUND IN RESPONSE (case-insensitive)\n"
+                        f"  Anchor term        : '{anchor}'\n"
                         f"  Snippet            : `{snippet}`\n"
-                        f"  YOUR TASK          : Locate the anchor '{anchor}' inside the snippet.\n"
-                        f"                       Examine the characters IMMEDIATELY surrounding it.\n"
-                        f"                       Did the special characters from the full input\n"
-                        f"                       (e.g., {[c for c in decoded_val if not c.isalnum()]})\n"
-                        f"                       survive RAW, get HTML-encoded (&lt; &gt; &quot;),\n"
-                        f"                       get JSON-encoded (\\u003e), or were they dropped?"
+                        f"  {verdict}"
                     )
 
         # ── ROUTE B: SSRF — Response Body Inspection ────────────────────────────
