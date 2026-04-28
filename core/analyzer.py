@@ -17,24 +17,49 @@ _DEFAULT_MODEL = "qwen2.5-coder:7b"
 # Knowledge router
 # ---------------------------------------------------------------------------
 
-def _triggered_vulns(burp_requests: Sequence[BurpRequest], swagger_endpoints: Sequence[SwaggerEndpoint]) -> set[str]:
-    """Return the set of vuln names whose trigger keywords match a request
-    parameter NAME (query string, form body, or JSON key).
+_URL_LIKE_PREFIXES = ("http://", "https://", "ftp://", "file://", "dict://", "gopher://")
+_IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/|$)")
 
-    Routing is intentionally restricted to param names — not header values,
-    paths, or body content — to prevent cross-contamination between heuristics.
-    For example, the Host header must never trigger the SSRF heuristic when
-    analyzing XSS traffic.
+
+def _value_looks_like_ssrf_target(value: str) -> bool:
+    """Return True if the decoded parameter value is a URL, IP, or file path.
+
+    Used to trigger SSRF analysis even when the param name doesn't match any
+    keyword (e.g., stockApi, apiEndpoint, server).
+    """
+    v = value.strip()
+    if any(v.lower().startswith(p) for p in _URL_LIKE_PREFIXES):
+        return True
+    if _IP_RE.match(v):
+        return True
+    return False
+
+
+def _triggered_vulns(burp_requests: Sequence[BurpRequest], swagger_endpoints: Sequence[SwaggerEndpoint]) -> set[str]:
+    """Return the set of vuln names triggered by this traffic.
+
+    Matching uses two strategies to avoid false positives:
+      - Param NAME exact match against trigger_keywords (XSS, most vulns).
+      - Param VALUE shape match for SSRF — any URL/IP value triggers SSRF
+        regardless of param name, because servers fetch whatever value is sent.
     """
     matched: set[str] = set()
     for req in burp_requests:
-        param_names = {p.lower() for p in _extract_params(req)}
+        params = _extract_params(req)
+        param_names = {p.lower() for p in params}
+        # Name-based routing for all vuln classes.
         for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
             if vuln_name in matched:
                 continue
             for keyword in entry["trigger_keywords"]:
                 if keyword.lower() in param_names:
                     matched.add(vuln_name)
+                    break
+        # Value-based routing: any URL/IP value triggers SSRF.
+        if "SSRF" not in matched:
+            for val in params.values():
+                if _value_looks_like_ssrf_target(val):
+                    matched.add("SSRF")
                     break
     for ep in swagger_endpoints:
         ep_params = {p.lower() for p in ep.parameters}
@@ -212,19 +237,20 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
         # ── ROUTE B: SSRF — Response Body Inspection ────────────────────────────
         if "SSRF" in triggered_vulns:
             body_excerpt = req.response_body[:_SSRF_BODY_EXCERPT_LEN]
+            ssrf_keywords = {k.lower() for k in VULN_KNOWLEDGE_BASE["SSRF"]["trigger_keywords"]}
             for param, decoded_val in params.items():
-                # Only emit for params whose names match SSRF keywords.
-                ssrf_keywords = {k.lower() for k in VULN_KNOWLEDGE_BASE["SSRF"]["trigger_keywords"]}
-                if param.lower() not in ssrf_keywords:
+                # Emit for params that match by name OR by value shape (URL/IP).
+                if param.lower() not in ssrf_keywords and not _value_looks_like_ssrf_target(decoded_val):
                     continue
                 hints.append(
                     f"SSRF PRE-PROCESSOR ALERT [{endpoint}]\n"
                     f"  Parameter   : '{param}'\n"
                     f"  Value       : '{decoded_val}'\n"
                     f"  YOUR TASK   : DO NOT look for input reflections.\n"
-                    f"                Analyze the server response excerpt below.\n"
-                    f"                Does it resemble internal network data, an admin panel,\n"
-                    f"                cloud metadata (AWS/GCP/Azure), or a specific backend error?\n"
+                    f"                Apply the BASELINE FALLBACK RULE: the value '{decoded_val}'\n"
+                    f"                looks like a URL/IP/hostname. This IS an SSRF surface.\n"
+                    f"                Analyze the response excerpt for internal data leaks.\n"
+                    f"                Then output the full SSRF Action Plan payloads.\n"
                     f"  Response excerpt:\n{body_excerpt}"
                 )
 

@@ -282,7 +282,7 @@ If the parameter value matches ANY of these patterns:
   • A full URL                  (e.g., http://..., https://..., ftp://...)
   • A hostname or domain        (e.g., internal-server, api.company.internal)
   • An IP address               (e.g., 192.168.1.1, 10.0.0.5, 172.16.0.1)
-  • A file path                 (e.g., /etc/passwd, C:\Windows\..., file://...)
+  • A file path                 (e.g., /etc/passwd, C:\\Windows\\..., file://...)
 
 → The parameter IS an SSRF surface by definition.
 → You MUST classify this as 🟡 Investigation Lead regardless of the response.
