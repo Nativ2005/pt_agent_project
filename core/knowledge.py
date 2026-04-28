@@ -270,7 +270,30 @@ DO NOT REPORT — if ANY is true:
   • No parameter has any plausible server-fetch semantics.
 
 ─────────────────────────────────────────────
-STEP 4 — ACTION PLAN: ADVANCED SSRF PAYLOADS
+STEP 4 — BASELINE FALLBACK (PASSIVE TRAFFIC RULE)
+─────────────────────────────────────────────
+In passive traffic analysis, the captured request is almost always a baseline
+request — the user sent a normal, legitimate value, not an exploit. The server
+response will therefore look completely normal and safe. This is expected.
+
+⚠️  CRITICAL RULE — DO NOT dismiss SSRF because the response looks safe:
+
+If the parameter value matches ANY of these patterns:
+  • A full URL                  (e.g., http://..., https://..., ftp://...)
+  • A hostname or domain        (e.g., internal-server, api.company.internal)
+  • An IP address               (e.g., 192.168.1.1, 10.0.0.5, 172.16.0.1)
+  • A file path                 (e.g., /etc/passwd, C:\Windows\..., file://...)
+
+→ The parameter IS an SSRF surface by definition.
+→ You MUST classify this as 🟡 Investigation Lead regardless of the response.
+→ You MUST output the full SSRF Action Plan (Step 5) so the human operator
+  can replace the baseline value with the attack payloads and test manually.
+
+The absence of evidence in passive traffic is NOT evidence of absence.
+The exploit has simply not been attempted yet. Your job is to flag the surface.
+
+─────────────────────────────────────────────
+STEP 5 — ACTION PLAN: ADVANCED SSRF PAYLOADS
 ─────────────────────────────────────────────
 For each lead or verified finding, provide these context-matched payloads.
 All payloads MUST be formatted as Markdown inline code blocks (backticks).
