@@ -176,15 +176,27 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
         params = _extract_params(req)
         endpoint = f"{req.method} {req.path}"
         content_type = req.response_headers.get("Content-Type", "")
-        param_names_lower = {p.lower() for p in params}
 
-        # ── Determine which vuln classes are triggered by this request's params ──
+        # ── Per-param routing — mirrors _triggered_vulns() exactly ──────────────
+        # Must include value-based SSRF detection so URL-valued params (e.g.
+        # url=http://169.254.169.254/...) reach Route B even when the param
+        # name does not appear in SSRF trigger_keywords.
         triggered_vulns: set[str] = set()
-        for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
-            for keyword in entry["trigger_keywords"]:
-                if keyword.lower() in param_names_lower:
-                    triggered_vulns.add(vuln_name)
-                    break
+        is_json_response = "application/json" in content_type
+        for param, val in params.items():
+            if _value_looks_like_ssrf_target(val):
+                triggered_vulns.add("SSRF")
+                continue
+            param_lower = param.lower()
+            for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+                if vuln_name in triggered_vulns:
+                    continue
+                if vuln_name == "Reflected_XSS" and is_json_response:
+                    continue
+                for keyword in entry["trigger_keywords"]:
+                    if keyword.lower() == param_lower:
+                        triggered_vulns.add(vuln_name)
+                        break
 
         # ── ROUTE A: Reflected XSS — Canary Anchoring ───────────────────────────
         if "Reflected_XSS" in triggered_vulns:
@@ -261,18 +273,24 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 
         # ── ROUTE B: SSRF — Response Body Inspection ────────────────────────────
         if "SSRF" in triggered_vulns:
-            # response_body is already decoded from base64 by burp_parser.
-            # Slice after stripping any leading whitespace left by the HTTP split.
-            body_excerpt = req.response_body.strip()[:_SSRF_BODY_EXCERPT_LEN]
-            body_excerpt_lower = body_excerpt.lower()
+            # response_body is the full decoded HTTP response (headers + body).
+            # Re-split here to guarantee we only search the body, not HTTP headers,
+            # regardless of how the parser stored it.
+            raw = req.response_body
+            for sep in ("\r\n\r\n", "\n\n"):
+                if sep in raw:
+                    raw = raw.split(sep, 1)[1]
+                    break
+            safe_body = raw.lower()[:_SSRF_BODY_EXCERPT_LEN]
+            body_excerpt = raw[:_SSRF_BODY_EXCERPT_LEN]
 
-            print(f"[DEBUG] SSRF Excerpt ({endpoint}): {body_excerpt[:100]}...")
+            print(f"[DEBUG] Decoded SSRF Body ({endpoint}): {safe_body[:100]}...")
 
             _CLOUD_METADATA_SIGNATURES = [
                 "azenvironment", "azurepubliccloud", "compute", "metadata",
                 "ami-id", "instance-action", "instanceid", "computemetadata",
             ]
-            matched_signatures = [s for s in _CLOUD_METADATA_SIGNATURES if s in body_excerpt_lower]
+            matched_signatures = [s for s in _CLOUD_METADATA_SIGNATURES if s in safe_body]
 
             if matched_signatures:
                 print(f"[DEBUG] 🌩️ Cloud signature matched in Python! Injecting Override hint. Matched: {matched_signatures}")
