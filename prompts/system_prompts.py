@@ -26,12 +26,12 @@ After closing the </analysis> tag, output your report strictly using this format
 [Write a brief, 1-2 sentence executive summary of the traffic analyzed and the overall outcome. E.g., 'Analyzed a GET request to the /search endpoint. Successfully verified a Reflected XSS vulnerability due to lack of HTML encoding.']
 
 ## 🔴 Verified Findings
-[List verified findings here. Include the exact Endpoint. If verified, you MUST include the Context Breakout payloads (e.g., '"> <script>alert(1)</script>') directly inside this section as bullet points.]
+[List verified findings here. Include the exact Endpoint and the Context Breakout payloads formatted in `backticks`.]
 *If none, write: No verified vulnerabilities found.*
 
 ## 🟡 Investigation Leads (Action Plan)
-[List unverified leads here. Provide clear, numbered manual testing steps.]
-*If a finding was already placed in Verified Findings, DO NOT list it again here. Leave this section empty or write 'None needed for verified endpoints'.*
+[List unverified leads here with numbered testing steps.]
+*CRITICAL: This section is MUTUALLY EXCLUSIVE with Verified Findings. If you reported an endpoint in Verified Findings, you MUST NOT mention it again here. If there are no unverified leads, strictly write: 'None needed for verified endpoints'.*
 
 Specific Vulnerability Knowledge:
 <knowledge>

