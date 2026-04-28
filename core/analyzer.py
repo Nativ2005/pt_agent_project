@@ -38,29 +38,36 @@ def _value_looks_like_ssrf_target(value: str) -> bool:
 def _triggered_vulns(burp_requests: Sequence[BurpRequest], swagger_endpoints: Sequence[SwaggerEndpoint]) -> set[str]:
     """Return the set of vuln names triggered by this traffic.
 
-    Matching uses two strategies to avoid false positives:
-      - Param NAME exact match against trigger_keywords (XSS, most vulns).
-      - Param VALUE shape match for SSRF — any URL/IP value triggers SSRF
-        regardless of param name, because servers fetch whatever value is sent.
+    Per-param routing with three isolation gates:
+      1. URL/IP-valued params → SSRF only. Skip all other vuln classes for
+         that param so XSS heuristic is never injected alongside SSRF.
+      2. JSON Content-Type → skip Reflected_XSS entirely for that request.
+      3. Name-based exact match for all remaining params.
     """
     matched: set[str] = set()
     for req in burp_requests:
         params = _extract_params(req)
-        param_names = {p.lower() for p in params}
-        # Name-based routing for all vuln classes.
-        for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
-            if vuln_name in matched:
-                continue
-            for keyword in entry["trigger_keywords"]:
-                if keyword.lower() in param_names:
-                    matched.add(vuln_name)
-                    break
-        # Value-based routing: any URL/IP value triggers SSRF.
-        if "SSRF" not in matched:
-            for val in params.values():
-                if _value_looks_like_ssrf_target(val):
-                    matched.add("SSRF")
-                    break
+        content_type = req.headers.get("Content-Type", "")
+        is_json_response = "application/json" in content_type
+
+        for param, val in params.items():
+            # Gate 1 — URL/IP value → SSRF surface only.
+            if _value_looks_like_ssrf_target(val):
+                matched.add("SSRF")
+                continue  # do not check this param against XSS or other vulns
+
+            # Gate 2 — JSON response → XSS is impossible, skip it.
+            param_lower = param.lower()
+            for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+                if vuln_name in matched:
+                    continue
+                if vuln_name == "Reflected_XSS" and is_json_response:
+                    continue
+                for keyword in entry["trigger_keywords"]:
+                    if keyword.lower() == param_lower:
+                        matched.add(vuln_name)
+                        break
+
     for ep in swagger_endpoints:
         ep_params = {p.lower() for p in ep.parameters}
         for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
@@ -132,18 +139,15 @@ def _make_snippet(haystack: str, match_start: int, match_len: int) -> str:
 
 
 def _extract_anchor(decoded_val: str) -> str:
-    """Extract only the alphanumeric characters from a decoded value.
+    """Return the FIRST contiguous alphanumeric word of 3+ characters.
 
-    This 'canary' survives mutations the payload itself may not:
-    case changes, HTML/JSON encoding, and partial reflection all leave
-    the alphabetic core intact. Searching for it is far more robust
-    than searching for the full payload.
-
-    Returns an empty string if fewer than 3 alphanumeric chars exist
-    (too short to be a meaningful anchor — would cause false positives).
+    Using the full concatenated alphanum string (e.g., 'Aurascript' from
+    'Aura"><script>') fails when HTML entities or spaces break contiguity in
+    the response. The first word ('Aura') almost always appears verbatim
+    regardless of how the server encodes the surrounding special characters.
     """
-    anchor = re.sub(r"[^a-zA-Z0-9]", "", decoded_val)
-    return anchor if len(anchor) >= 3 else ""
+    m = re.search(r"[a-zA-Z0-9]{3,}", decoded_val)
+    return m.group() if m else ""
 
 
 _SSRF_BODY_EXCERPT_LEN = 1000
@@ -193,8 +197,22 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
                     if not anchor:
                         continue
                     idx = response_lower.find(anchor.lower())
+
+                    # Always emit a hint — even for not-found — so the model
+                    # cannot hallucinate raw chars from the request URL.
                     if idx == -1:
+                        hints.append(
+                            f"XSS PRE-PROCESSOR RESULT [{endpoint}]\n"
+                            f"  Parameter          : '{param}'\n"
+                            f"  Full decoded input : '{decoded_val}'\n"
+                            f"  Anchor term        : '{anchor}'\n"
+                            f"  Anchor status      : NOT FOUND IN RESPONSE\n"
+                            f"  PYTHON VERDICT     : The input was NOT reflected. "
+                            f"Do NOT assume raw characters appeared in the response. "
+                            f"Classify as 🟡 Investigation Lead at most."
+                        )
                         continue
+
                     snippet = _make_snippet(req.response_body, idx, len(anchor))
 
                     # Python determines the encoding verdict — do not leave this to the LLM.
