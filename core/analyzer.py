@@ -17,25 +17,49 @@ _DEFAULT_MODEL = "qwen2.5-coder:7b"
 # Knowledge router
 # ---------------------------------------------------------------------------
 
-def _get_knowledge_context(signal: str) -> str:
-    """Scan *signal* for trigger keywords and return matched heuristics.
+def _triggered_vulns(burp_requests: Sequence[BurpRequest], swagger_endpoints: Sequence[SwaggerEndpoint]) -> set[str]:
+    """Return the set of vuln names whose trigger keywords match a request
+    parameter NAME (query string, form body, or JSON key).
 
-    Each matched entry contributes one block:
-        [VulnName]: <heuristic text>
-
-    If nothing matches, returns an empty string so the prompt placeholder
-    is left blank rather than filled with noise.
+    Routing is intentionally restricted to param names — not header values,
+    paths, or body content — to prevent cross-contamination between heuristics.
+    For example, the Host header must never trigger the SSRF heuristic when
+    analyzing XSS traffic.
     """
-    matched: list[str] = []
-    signal_lower = signal.lower()
+    matched: set[str] = set()
+    for req in burp_requests:
+        param_names = {p.lower() for p in _extract_params(req)}
+        for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+            if vuln_name in matched:
+                continue
+            for keyword in entry["trigger_keywords"]:
+                if keyword.lower() in param_names:
+                    matched.add(vuln_name)
+                    break
+    for ep in swagger_endpoints:
+        ep_params = {p.lower() for p in ep.parameters}
+        for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+            if vuln_name in matched:
+                continue
+            for keyword in entry["trigger_keywords"]:
+                if keyword.lower() in ep_params:
+                    matched.add(vuln_name)
+                    break
+    return matched
 
-    for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
-        for keyword in entry["trigger_keywords"]:
-            if keyword.lower() in signal_lower:
-                matched.append(f"[{vuln_name}]: {entry['heuristic']}")
-                break  # one match per vuln is enough
 
-    return "\n\n".join(matched)
+def _get_knowledge_context(vuln_names: set[str]) -> str:
+    """Return only the heuristics for the explicitly triggered vuln names.
+
+    Each matched entry contributes one block so the LLM never sees heuristics
+    for vulnerabilities unrelated to the current traffic.
+    """
+    blocks = [
+        f"[{name}]: {VULN_KNOWLEDGE_BASE[name]['heuristic']}"
+        for name in vuln_names
+        if name in VULN_KNOWLEDGE_BASE
+    ]
+    return "\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -282,30 +306,20 @@ def _build_traffic_context(
     return "\n\n---\n\n".join(sections) if sections else "(no traffic data provided)"
 
 
-def _build_signal(
-    burp_requests: Sequence[BurpRequest],
-    swagger_endpoints: Sequence[SwaggerEndpoint],
-) -> str:
-    """Flatten all observable surfaces into one string for keyword scanning."""
-    parts: list[str] = []
-    for req in burp_requests:
-        parts.append(f"{req.method} {req.path}")
-        parts.extend(f"{k}: {v}" for k, v in req.headers.items())
-        if req.body:
-            parts.append(req.body)
-    for ep in swagger_endpoints:
-        parts.append(f"{ep.method} {ep.full_url}")
-        parts.extend(ep.parameters)
-    return "\n".join(parts)
-
 
 def _build_prompt(
     burp_requests: Sequence[BurpRequest],
     swagger_endpoints: Sequence[SwaggerEndpoint],
 ) -> str:
-    """Return the fully-formatted RED_TEAMER_PROMPT ready for Ollama."""
-    signal = _build_signal(burp_requests, swagger_endpoints)
-    knowledge_context = _get_knowledge_context(signal)
+    """Return the fully-formatted RED_TEAMER_PROMPT ready for Ollama.
+
+    Heuristic isolation guarantee: only the heuristics for vulns triggered by
+    actual parameter names are injected. No other KB entries are visible to
+    the LLM, preventing cross-contamination (e.g. SSRF terms appearing in an
+    XSS analysis).
+    """
+    vuln_names = _triggered_vulns(burp_requests, swagger_endpoints)
+    knowledge_context = _get_knowledge_context(vuln_names)
     traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
     system_hints = _python_pre_processor(burp_requests)
     return RED_TEAMER_PROMPT.format(
