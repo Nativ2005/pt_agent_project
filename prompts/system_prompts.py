@@ -22,6 +22,9 @@ Inside the `<analysis>` block, you must physically list the data:
 REPORT STRUCTURE:
 After closing the </analysis> tag, output your report strictly using this format:
 
+## 📊 Analysis Summary
+[Write a brief, 1-2 sentence executive summary of the traffic analyzed and the overall outcome. E.g., 'Analyzed a GET request to the /search endpoint. Successfully verified a Reflected XSS vulnerability due to lack of HTML encoding.']
+
 ## 🔴 Verified Findings
 [List verified findings here. Include the exact Endpoint. If verified, you MUST include the Context Breakout payloads (e.g., '"> <script>alert(1)</script>') directly inside this section as bullet points.]
 *If none, write: No verified vulnerabilities found.*
