@@ -32,27 +32,37 @@ CASE B — "No anchor reflections detected":
 STEP 2 — VULNERABILITY GATE: WHAT HAPPENED TO THE SPECIAL CHARACTERS?
 ─────────────────────────────────────────────
 You have the Python snippet. Locate the anchor term inside it.
-Now examine the characters immediately BEFORE and AFTER the anchor:
+Now examine the characters immediately BEFORE and AFTER the anchor.
 
-CASE: Special characters appear RAW and UNENCODED around the anchor
-  Example: the input was `Aura">` and the snippet shows: value="Aura">
-  The " and > survived. The server did not sanitize.
-  → 🔴 VERIFIED HIGH. Proceed to Step 3 to identify the exact context (A–E).
+⚠️  CRITICAL LOGIC — READ THIS CAREFULLY BEFORE CLASSIFYING:
 
-CASE: Special characters are HTML-encoded around the anchor
-  Example: snippet shows: <div>Aura&quot;&gt;</div>
-  The server encoded " → &quot; and > → &gt;. Sanitization is present.
+IF the special characters (like `<`, `>`, `"`, `'`) appear in the snippet
+EXACTLY as they were sent — raw, unescaped, not converted to entities —
+this means the server did NOT sanitize the input.
+Raw reflection IS the vulnerability. The browser will interpret those
+characters as HTML, enabling script injection.
+→ 🔴 VERIFIED HIGH. You MUST classify this as a verified vulnerability.
+   You MUST provide Context Breakout payloads in backticks in your report.
+   Do NOT write "No vulnerabilities found" when raw characters are present.
+
+Example of VERIFIED HIGH:
+  Input was `Aura">` and the snippet shows: value="Aura">
+  The `"` and `>` survived raw. This is exploitable. → 🔴 VERIFIED HIGH.
+
+IF the special characters were safely transformed, the server is protected:
+
+CASE: HTML-encoded — snippet shows: <div>Aura&quot;&gt;</div>
+  The server converted " → &quot; and > → &gt;. Sanitization is present.
   → 🟡 INVESTIGATION LEAD. Note which characters were encoded.
 
-CASE: Special characters are JSON-encoded around the anchor
-  Example: snippet shows: {"msg": "Aura>"}
-  > is the JSON encoding of >. May still be exploitable in JS context.
+CASE: JSON-encoded — snippet shows: {"msg": "Aura>"}
+  Characters converted to unicode escapes. May still be exploitable in JS.
   → 🟡 INVESTIGATION LEAD. Note the JS context risk.
 
-CASE: Special characters are completely absent around the anchor
-  Example: snippet shows: <div>Aura</div> (input was `Aura">`)
-  The server stripped the special characters entirely.
-  → 🟡 INVESTIGATION LEAD. Stripping is not always safe — test bypass payloads.
+CASE: Characters stripped entirely — snippet shows: <div>Aura</div>
+  The server removed the special characters. Not immediately exploitable,
+  but stripping is not always safe — filter bypasses may work.
+  → 🟡 INVESTIGATION LEAD. Test bypass payloads.
 
 ─────────────────────────────────────────────
 STEP 3 — REFLECTION CONTEXT IDENTIFICATION (only when Step 2 → VERIFIED HIGH)
