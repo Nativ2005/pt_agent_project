@@ -311,6 +311,11 @@ TIER 5 — Blind SSRF Detection (out-of-band):
   Replace target with your Burp Collaborator or interactsh domain:
     `http://YOUR-COLLABORATOR-SUBDOMAIN/ssrf-test`
   If the server makes a DNS lookup or HTTP callback → confirmed blind SSRF.
+
+CRITICAL FORMATTING REMINDER:
+You MUST do your thinking inside `<analysis>...</analysis>`.
+When you are done thinking, you MUST explicitly output the closing `</analysis>` tag.
+Immediately AFTER the closing tag, output your final Markdown report strictly using the `## 📊 Analysis Summary`, `## 🔴 Verified Findings`, and `## 🟡 Investigation Leads` structure. Do NOT put the final report inside the analysis block.
 """.strip(),
     },
 }
