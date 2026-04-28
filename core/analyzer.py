@@ -47,7 +47,7 @@ def _triggered_vulns(burp_requests: Sequence[BurpRequest], swagger_endpoints: Se
     matched: set[str] = set()
     for req in burp_requests:
         params = _extract_params(req)
-        content_type = req.headers.get("Content-Type", "")
+        content_type = req.response_headers.get("Content-Type", "")
         is_json_response = "application/json" in content_type
 
         for param, val in params.items():
@@ -175,7 +175,7 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 
         params = _extract_params(req)
         endpoint = f"{req.method} {req.path}"
-        content_type = req.headers.get("Content-Type", "")
+        content_type = req.response_headers.get("Content-Type", "")
         param_names_lower = {p.lower() for p in params}
 
         # ── Determine which vuln classes are triggered by this request's params ──
@@ -207,9 +207,10 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
                             f"  Full decoded input : '{decoded_val}'\n"
                             f"  Anchor term        : '{anchor}'\n"
                             f"  Anchor status      : NOT FOUND IN RESPONSE\n"
-                            f"  PYTHON VERDICT     : The input was NOT reflected. "
-                            f"Do NOT assume raw characters appeared in the response. "
-                            f"Classify as 🟡 Investigation Lead at most."
+                            f"  <system_hint>PYTHON PRE-PROCESSOR DETECTED: "
+                            f"The input anchor '{anchor}' was NOT found in the response body. "
+                            f"Do NOT assume raw characters appeared. "
+                            f"Classify as Investigation Lead at most.</system_hint>"
                         )
                         continue
 
@@ -231,17 +232,23 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 
                     if raw_chars:
                         verdict = (
-                            f"⚠️  PYTHON VERDICT: RAW — {', '.join(raw_chars)} appear UNENCODED in the snippet. "
-                            f"The server did NOT sanitize these characters. "
-                            f"This is a 🔴 VERIFIED HIGH XSS. Do NOT say the characters were encoded."
+                            f"<system_hint>PYTHON PRE-PROCESSOR DETECTED: "
+                            f"The special characters {', '.join(raw_chars)} survived RAW and UNENCODED. "
+                            f"This is HIGHLY VULNERABLE.</system_hint>"
                         )
                     elif encoded_chars:
                         verdict = (
-                            f"✅ PYTHON VERDICT: ENCODED — {', '.join(encoded_chars)}. "
-                            f"The server sanitized the input. Classify as 🟡 Investigation Lead."
+                            f"<system_hint>PYTHON PRE-PROCESSOR DETECTED: "
+                            f"The special characters were SAFELY HTML ENCODED "
+                            f"({', '.join(encoded_chars)}). "
+                            f"This is NOT vulnerable to XSS.</system_hint>"
                         )
                     else:
-                        verdict = "ℹ️  PYTHON VERDICT: Special characters absent from snippet — likely stripped."
+                        verdict = (
+                            "<system_hint>PYTHON PRE-PROCESSOR DETECTED: "
+                            "Special characters were absent from the snippet — likely stripped by the server. "
+                            "Classify as Investigation Lead.</system_hint>"
+                        )
 
                     hints.append(
                         f"XSS PRE-PROCESSOR ALERT [{endpoint}]\n"

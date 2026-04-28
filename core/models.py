@@ -11,9 +11,10 @@ class BurpRequest(BaseModel):
     host: str
     path: str
     method: str
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {}           # HTTP request headers
     body: str = ""
-    response_body: str = ""  # raw HTML/text response body captured by Burp
+    response_body: str = ""               # decoded HTTP response body
+    response_headers: dict[str, str] = {} # decoded HTTP response headers
 
     @field_validator("method")
     @classmethod

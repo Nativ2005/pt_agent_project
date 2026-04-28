@@ -79,9 +79,14 @@ def parse_burp_xml(xml_path: Path) -> list[BurpRequest]:
             response_el.text if response_el is not None else None, resp_b64
         )
         response_body = ""
+        response_headers: dict[str, str] = {}
         if raw_response:
             resp_parts = raw_response.split("\r\n\r\n", 1)
             response_body = resp_parts[1] if len(resp_parts) > 1 else ""
+            for line in resp_parts[0].splitlines()[1:]:  # skip status line
+                if ": " in line:
+                    k, _, v = line.partition(": ")
+                    response_headers[k] = v
 
         results.append(
             BurpRequest(
@@ -91,6 +96,7 @@ def parse_burp_xml(xml_path: Path) -> list[BurpRequest]:
                 headers=headers,
                 body=body,
                 response_body=response_body,
+                response_headers=response_headers,
             )
         )
 
