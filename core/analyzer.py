@@ -255,11 +255,15 @@ def _build_prompt(
     knowledge_context = _get_knowledge_context(signal)
     traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
     system_hints = _python_pre_processor(burp_requests)
-    return RED_TEAMER_PROMPT.format(
+    prompt = RED_TEAMER_PROMPT.format(
         knowledge_context=knowledge_context,
         system_hints=system_hints,
         traffic_context=traffic_context,
     )
+    # Force the model to begin inside the analysis block. Local models reliably
+    # continue from a mid-tag prefix; they routinely ignore formatting rules in
+    # the preamble when the prompt is long.
+    return prompt + "\n\n<analysis>"
 
 
 # ---------------------------------------------------------------------------

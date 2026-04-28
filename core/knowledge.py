@@ -171,10 +171,10 @@ Raw HTML tags in your output will break the Markdown renderer. Always use backti
     },
     "SSRF": {
         "trigger_keywords": [
-            "url", "uri", "src", "dest", "destination", "redirect", "redirect_url",
-            "next", "target", "path", "host", "site", "page", "ref", "return",
+            "uri", "src", "dest", "destination", "redirect_url",
+            "next", "target", "host", "site", "ref",
             "return_url", "callback", "webhook", "endpoint", "fetch", "load",
-            "open", "file", "proxy", "request", "api_url", "image_url", "link",
+            "open", "file", "proxy", "api_url", "image_url", "link",
         ],
         "heuristic": """
 VULNERABILITY: Server-Side Request Forgery (SSRF)
