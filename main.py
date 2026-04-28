@@ -78,7 +78,7 @@ def analyze(
         help="Path to a Swagger / OpenAPI JSON or YAML file.",
     ),
     model: str = typer.Option(
-        "llama3:latest", "--model",
+        "qwen2.5-coder:7b", "--model",
         help="Local Ollama model to use for analysis.",
     ),
     host: str = typer.Option(
@@ -169,7 +169,7 @@ def analyze(
 
 @app.command("test-connection")
 def test_connection(
-    model: str = typer.Option("llama3", "--model", help="Ollama model name to verify."),
+    model: str = typer.Option("qwen2.5-coder:7b", "--model", help="Ollama model name to verify."),
     host: str = typer.Option("http://localhost:11434", "--host", help="Ollama base URL."),
 ) -> None:
     """Verify that the local Ollama daemon is reachable and list available models."""

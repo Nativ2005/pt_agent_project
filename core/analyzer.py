@@ -10,7 +10,7 @@ from core.models import BurpRequest, SwaggerEndpoint
 from core.ollama_client import OllamaClient
 from prompts.system_prompts import RED_TEAMER_PROMPT
 
-_DEFAULT_MODEL = "llama3:latest"
+_DEFAULT_MODEL = "qwen2.5-coder:7b"
 
 
 # ---------------------------------------------------------------------------

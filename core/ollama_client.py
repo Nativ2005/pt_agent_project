@@ -7,9 +7,9 @@ import httpx
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _GENERATE_PATH = "/api/generate"
-_DEFAULT_MODEL = "llama3"
+_DEFAULT_MODEL = "qwen2.5-coder:7b"
 _CONNECT_TIMEOUT = 5.0
-_READ_TIMEOUT = 600.0  # 10 min — llama3 cold-start on CPU can be slow
+_READ_TIMEOUT = 600.0
 
 
 class OllamaConnectionError(RuntimeError):
