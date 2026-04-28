@@ -8,8 +8,9 @@ CRITICAL RULES:
 
 THINKING PHASE: You must start by outputting your internal reasoning based on the Python hints.
 - Step 1: List every parameter name and its exact value identified in the request.
-- Step 2: Check the Python Pre-Processor Results block. What did it find?
-- Step 3: Using the anchor snippet, reason about what happened to the special characters.
+- Step 2: Check the Python Pre-Processor Results block. What type of alert was emitted — XSS or SSRF?
+- Step 3 (XSS only): Be hyper-literal. Read the snippet exactly as written. If you see `">`, do NOT say it was encoded. State exactly what raw characters survived. A character is only encoded if you see its entity form (&quot; &gt; &lt;) literally in the snippet.
+- Step 3 (SSRF only): Read the response excerpt. Does it look like internal data, cloud metadata, or a backend error? Do NOT search for input reflections.
 - Step 4: Match against the provided Heuristics and decide your classification.
 Do not mention vulnerabilities outside of their designated heuristic.
 

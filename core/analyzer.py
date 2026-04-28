@@ -97,19 +97,22 @@ def _extract_anchor(decoded_val: str) -> str:
     return anchor if len(anchor) >= 3 else ""
 
 
+_SSRF_BODY_EXCERPT_LEN = 1000
+
+
 def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
-    """Canary-Anchoring Pre-Processor: search for the alphanumeric core of each
-    parameter value inside the captured response body (case-insensitive).
+    """Vulnerability-Aware Pre-Processor.
 
-    Strategy:
-      1. Decode every parameter value.
-      2. Strip non-alphanumeric chars → anchor_term.
-      3. Case-insensitive search for anchor_term in response_body.
-      4. Extract a 75-char snippet around the match.
-      5. Emit a structured hint telling the LLM exactly what Python found
-         and asking it to reason about what happened to the special chars.
+    Routes each matched parameter to the correct analysis strategy based on
+    which vulnerability class triggered it:
 
-    Falls back to "no match" message when anchor is too short or absent.
+      Reflected_XSS  → Canary Anchoring: find the alphanumeric anchor in the
+                        response body and extract a 75-char context snippet.
+                        Skipped entirely for application/json responses.
+
+      SSRF           → Response Inspection: extract the first 1000 chars of
+                        the response body and ask the LLM to judge whether it
+                        looks like internal network data, metadata, or an error.
     """
     hints: list[str] = []
 
@@ -117,45 +120,69 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
         if not req.response_body:
             continue
 
-        # Fast-fail: XSS is impossible in a JSON response — skip snippet extraction entirely.
-        content_type = req.headers.get("Content-Type", "")
-        if "application/json" in content_type:
-            print(f"[DEBUG] Skipping XSS check: application/json response ({req.method} {req.path})")
-            continue
-
         params = _extract_params(req)
         endpoint = f"{req.method} {req.path}"
-        response_lower = req.response_body.lower()
+        content_type = req.headers.get("Content-Type", "")
+        param_names_lower = {p.lower() for p in params}
 
-        for param, decoded_val in params.items():
-            anchor = _extract_anchor(decoded_val)
+        # ── Determine which vuln classes are triggered by this request's params ──
+        triggered_vulns: set[str] = set()
+        for vuln_name, entry in VULN_KNOWLEDGE_BASE.items():
+            for keyword in entry["trigger_keywords"]:
+                if keyword.lower() in param_names_lower:
+                    triggered_vulns.add(vuln_name)
+                    break
 
-            # Fallback: anchor too short — skip to avoid noise.
-            if not anchor:
-                continue
+        # ── ROUTE A: Reflected XSS — Canary Anchoring ───────────────────────────
+        if "Reflected_XSS" in triggered_vulns:
+            if "application/json" in content_type:
+                print(f"[DEBUG] Skipping XSS check: application/json response ({endpoint})")
+            else:
+                response_lower = req.response_body.lower()
+                for param, decoded_val in params.items():
+                    anchor = _extract_anchor(decoded_val)
+                    if not anchor:
+                        continue
+                    idx = response_lower.find(anchor.lower())
+                    if idx == -1:
+                        continue
+                    snippet = _make_snippet(req.response_body, idx, len(anchor))
+                    hints.append(
+                        f"XSS PRE-PROCESSOR ALERT [{endpoint}]\n"
+                        f"  Parameter          : '{param}'\n"
+                        f"  Full decoded input : '{decoded_val}'\n"
+                        f"  Anchor term        : '{anchor}' (alphanumeric core of the input)\n"
+                        f"  Anchor status      : FOUND IN RESPONSE (case-insensitive)\n"
+                        f"  Snippet            : `{snippet}`\n"
+                        f"  YOUR TASK          : Locate the anchor '{anchor}' inside the snippet.\n"
+                        f"                       Examine the characters IMMEDIATELY surrounding it.\n"
+                        f"                       Did the special characters from the full input\n"
+                        f"                       (e.g., {[c for c in decoded_val if not c.isalnum()]})\n"
+                        f"                       survive RAW, get HTML-encoded (&lt; &gt; &quot;),\n"
+                        f"                       get JSON-encoded (\\u003e), or were they dropped?"
+                    )
 
-            idx = response_lower.find(anchor.lower())
-            if idx == -1:
-                continue
-
-            snippet = _make_snippet(req.response_body, idx, len(anchor))
-            hints.append(
-                f"PYTHON PRE-PROCESSOR ALERT [{endpoint}]\n"
-                f"  Parameter     : '{param}'\n"
-                f"  Full decoded input : '{decoded_val}'\n"
-                f"  Anchor term   : '{anchor}' (alphanumeric core of the input)\n"
-                f"  Anchor status : FOUND IN RESPONSE (case-insensitive)\n"
-                f"  Snippet       : `{snippet}`\n"
-                f"  YOUR TASK     : Locate the anchor '{anchor}' inside the snippet.\n"
-                f"                  Examine the characters IMMEDIATELY surrounding it.\n"
-                f"                  Did the special characters from the full input\n"
-                f"                  (e.g., {[c for c in decoded_val if not c.isalnum()]})\n"
-                f"                  survive RAW, get HTML-encoded (&lt; &gt; &quot;),\n"
-                f"                  get JSON-encoded (\\u003e), or were they dropped?"
-            )
+        # ── ROUTE B: SSRF — Response Body Inspection ────────────────────────────
+        if "SSRF" in triggered_vulns:
+            body_excerpt = req.response_body[:_SSRF_BODY_EXCERPT_LEN]
+            for param, decoded_val in params.items():
+                # Only emit for params whose names match SSRF keywords.
+                ssrf_keywords = {k.lower() for k in VULN_KNOWLEDGE_BASE["SSRF"]["trigger_keywords"]}
+                if param.lower() not in ssrf_keywords:
+                    continue
+                hints.append(
+                    f"SSRF PRE-PROCESSOR ALERT [{endpoint}]\n"
+                    f"  Parameter   : '{param}'\n"
+                    f"  Value       : '{decoded_val}'\n"
+                    f"  YOUR TASK   : DO NOT look for input reflections.\n"
+                    f"                Analyze the server response excerpt below.\n"
+                    f"                Does it resemble internal network data, an admin panel,\n"
+                    f"                cloud metadata (AWS/GCP/Azure), or a specific backend error?\n"
+                    f"  Response excerpt:\n{body_excerpt}"
+                )
 
     if not hints:
-        return "No anchor reflections detected by Python pre-processor."
+        return "No pre-processor alerts triggered."
 
     return "\n\n".join(hints)
 
