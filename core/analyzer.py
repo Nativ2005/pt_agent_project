@@ -158,24 +158,23 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 # <analysis> block stripper
 # ---------------------------------------------------------------------------
 
-_ANALYSIS_RE = re.compile(
-    r"<analysis>.*?(</analysis>|$)",
-    re.DOTALL | re.IGNORECASE,
-)
+def _extract_report(text: str) -> str:
+    """Return everything after the closing </analysis> tag.
 
-
-def _strip_analysis_block(text: str) -> str:
-    """Remove the LLM's internal <analysis>…</analysis> chain-of-thought block.
-
-    Uses |$ so an unclosed tag doesn't swallow the entire response.
+    Split on the literal tag so there is no regex involved — the LLM either
+    closed the block or it didn't.  Taking parts[-1] handles the rare case
+    where the model emits multiple closing tags.
     """
     print(f"[DEBUG] Raw LLM Response length: {len(text)} characters")
-    cleaned = _ANALYSIS_RE.sub("", text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    cleaned = cleaned.lstrip("\n")
-    if not cleaned.strip():
-        print("[!] Analysis completed, but no Markdown report was generated outside the analysis block.")
-    return cleaned
+    parts = text.split("</analysis>")
+    if len(parts) > 1:
+        report = parts[-1].strip()
+        if not report:
+            print("[!] Analysis block closed but no Markdown report followed it.")
+        return report
+    # No closing tag — return the full text so nothing is silently lost.
+    print("[!] No </analysis> closing tag found — returning full LLM output.")
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -294,22 +293,16 @@ class AuraAnalyzer:
             system_prompt="",
             context_data=prompt,
         )
-        return _strip_analysis_block(raw)
+        return _extract_report(raw)
 
     async def analyze_stream(
         self,
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the PT analysis, suppressing the <analysis> block entirely.
-
-        Tokens are buffered until the closing </analysis> tag is confirmed,
-        then the Markdown report is streamed token-by-token from that point on.
-        """
+        """Stream the PT analysis. Collects all tokens, then splits on </analysis> to yield only the Markdown report."""
         prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
 
-        buffer = ""
-        past_analysis = False
         all_tokens: list[str] = []
 
         async for token in self._client.generate_analysis_stream(
@@ -318,29 +311,7 @@ class AuraAnalyzer:
         ):
             all_tokens.append(token)
 
-            if past_analysis:
-                yield token
-                continue
-
-            buffer += token
-
-            # Transition: closing tag found OR LLM wrote ## (report started without closing tag).
-            closing_found = "</analysis>" in buffer.lower()
-            report_started = not closing_found and "##" in buffer and "<analysis>" in buffer.lower()
-
-            if closing_found or report_started:
-                past_analysis = True
-                after = _ANALYSIS_RE.sub("", buffer).lstrip("\n")
-                if not after.strip():
-                    print("[!] Analysis completed, but no Markdown report was generated outside the analysis block.")
-                if after:
-                    yield after
-                buffer = ""
-
-        # If the LLM never opened an <analysis> block at all, emit everything.
-        if not past_analysis:
-            full = "".join(all_tokens)
-            print(f"[DEBUG] Raw LLM Response length: {len(full)} characters")
-            result = _strip_analysis_block(full)
-            if result:
-                yield result
+        full = "".join(all_tokens)
+        report = _extract_report(full)
+        if report:
+            yield report

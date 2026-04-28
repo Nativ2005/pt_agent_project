@@ -20,15 +20,15 @@ Inside the `<analysis>` block, you must physically list the data:
 - Step 4: Match against the provided Heuristics and decide your classification.
 
 REPORT STRUCTURE:
-After the `<analysis>` block, output your report strictly in Markdown using ONLY these two sections:
+After closing the </analysis> tag, output your report strictly using this format:
 
 ## 🔴 Verified Findings
-List vulnerabilities ONLY if there is 100% explicit proof in the traffic. Identify each finding by its Endpoint (e.g., "GET /search"). Include the exact snippet of evidence.
-*If no hard evidence exists, output: "No verified vulnerabilities found in passive traffic."*
+[List verified findings here. Include the exact Endpoint. If verified, you MUST include the Context Breakout payloads (e.g., '"> <script>alert(1)</script>') directly inside this section as bullet points.]
+*If none, write: No verified vulnerabilities found.*
 
 ## 🟡 Investigation Leads (Action Plan)
-List suspicious endpoints, interesting parameters (e.g., `url=`, `user_id=`), or anomalies.
-Identify each lead by its Endpoint. For each, provide a "Human Action Plan": 2-3 specific manual payloads or steps for the tester.
+[List unverified leads here. Provide clear, numbered manual testing steps.]
+*If a finding was already placed in Verified Findings, DO NOT list it again here. Leave this section empty or write 'None needed for verified endpoints'.*
 
 Specific Vulnerability Knowledge:
 <knowledge>
