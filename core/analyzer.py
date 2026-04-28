@@ -262,12 +262,27 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
         # ── ROUTE B: SSRF — Response Body Inspection ────────────────────────────
         if "SSRF" in triggered_vulns:
             body_excerpt = req.response_body[:_SSRF_BODY_EXCERPT_LEN]
+            body_excerpt_lower = body_excerpt.lower()
+
+            _CLOUD_METADATA_SIGNATURES = [
+                "azenvironment", "azurepubliccloud", "compute", "metadata",
+                "ami-id", "instance-action", "instanceid", "computemetadata",
+            ]
+            matched_signatures = [s for s in _CLOUD_METADATA_SIGNATURES if s in body_excerpt_lower]
+            cloud_verdict = (
+                "<system_hint>PYTHON PRE-PROCESSOR DETECTED: "
+                f"Cloud metadata signatures {matched_signatures} were found in the response body! "
+                "This is a CONFIRMED CRITICAL data leak. You MUST bypass all doubts and classify "
+                "this exactly as a 🔴 VERIFIED HIGH vulnerability. "
+                "Mention the leaked cloud data in your report.</system_hint>"
+            ) if matched_signatures else ""
+
             ssrf_keywords = {k.lower() for k in VULN_KNOWLEDGE_BASE["SSRF"]["trigger_keywords"]}
             for param, decoded_val in params.items():
                 # Emit for params that match by name OR by value shape (URL/IP).
                 if param.lower() not in ssrf_keywords and not _value_looks_like_ssrf_target(decoded_val):
                     continue
-                hints.append(
+                hint = (
                     f"SSRF PRE-PROCESSOR ALERT [{endpoint}]\n"
                     f"  Parameter   : '{param}'\n"
                     f"  Value       : '{decoded_val}'\n"
@@ -278,6 +293,9 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
                     f"                Then output the full SSRF Action Plan payloads.\n"
                     f"  Response excerpt:\n{body_excerpt}"
                 )
+                if cloud_verdict:
+                    hint += f"\n  {cloud_verdict}"
+                hints.append(hint)
 
     if not hints:
         return "No pre-processor alerts triggered."
