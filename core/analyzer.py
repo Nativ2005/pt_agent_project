@@ -361,8 +361,11 @@ def _build_traffic_context(
 def _build_prompt(
     burp_requests: Sequence[BurpRequest],
     swagger_endpoints: Sequence[SwaggerEndpoint],
-) -> str:
+) -> str | None:
     """Return the fully-formatted RED_TEAMER_PROMPT ready for Ollama.
+
+    Returns None when no vuln class is triggered — the caller must skip the
+    LLM invocation entirely (e.g. a JSON response with no SSRF surface).
 
     Heuristic isolation guarantee: only the heuristics for vulns triggered by
     actual parameter names are injected. No other KB entries are visible to
@@ -370,6 +373,9 @@ def _build_prompt(
     XSS analysis).
     """
     vuln_names = _triggered_vulns(burp_requests, swagger_endpoints)
+    if not vuln_names:
+        print(f"[DEBUG] No vuln classes triggered — skipping LLM for this item.")
+        return None
     knowledge_context = _get_knowledge_context(vuln_names)
     traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
     system_hints = _python_pre_processor(burp_requests)
@@ -410,9 +416,14 @@ class AuraAnalyzer:
         self,
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
-    ) -> str:
-        """Run the full PT analysis and return a cleaned Markdown report."""
+    ) -> str | None:
+        """Run the full PT analysis and return a cleaned Markdown report.
+
+        Returns None when no vuln surface is detected (fast-fail).
+        """
         prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
+        if prompt is None:
+            return None
         raw = await self._client.generate_analysis(
             system_prompt="",
             context_data=prompt,
@@ -424,8 +435,10 @@ class AuraAnalyzer:
         burp_requests: Sequence[BurpRequest] | None = None,
         swagger_endpoints: Sequence[SwaggerEndpoint] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the PT analysis. Collects all tokens, then splits on </analysis> to yield only the Markdown report."""
+        """Stream the PT analysis. Skips LLM entirely when no vuln surface detected."""
         prompt = _build_prompt(burp_requests or [], swagger_endpoints or [])
+        if prompt is None:
+            return  # nothing to yield — caller's loop will continue to next item
 
         all_tokens: list[str] = []
 

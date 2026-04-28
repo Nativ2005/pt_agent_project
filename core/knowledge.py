@@ -224,11 +224,24 @@ GATE A — Response contains internal data (🔴 VERIFIED HIGH):
   The response body contains content that could only originate from an internal
   system: AWS/GCP/Azure metadata, internal HTML, private API responses, file
   system paths, or error messages naming internal hostnames/IPs.
-  Examples:
-    • `"instanceId"`, `"ami-id"` → AWS EC2 metadata leak
+
+  ⚠️  CLOUD METADATA SIGNATURES — MANDATORY VERIFIED HIGH:
+  If ANY of these strings appear in the response body, this is a CONFIRMED
+  critical data leak. You MUST classify it as 🔴 VERIFIED HIGH immediately.
+  Bypass all other doubts. Do NOT classify as Investigation Lead.
+    • `azEnvironment`       → Azure IMDS response confirmed
+    • `AzurePublicCloud`    → Azure IMDS response confirmed
+    • `compute`             → Azure/GCP IMDS compute block confirmed
+    • `metadata`            → Cloud metadata endpoint reached
+    • `ami-id`              → AWS EC2 IMDSv1 response confirmed
+    • `instance-action`     → AWS EC2 instance metadata confirmed
+    • `instanceId`          → AWS EC2 metadata confirmed
+    • `computeMetadata`     → GCP metadata endpoint confirmed
+    • `root:x:0:0`          → /etc/passwd read via file:// SSRF confirmed
+
+  Other confirmed internal data patterns:
     • `<title>Internal Dashboard</title>` → internal service reached
-    • `root:x:0:0` in response body → /etc/passwd read via file:// SSRF
-  → 🔴 VERIFIED HIGH. Quote the exact leaked content as evidence.
+  → 🔴 VERIFIED HIGH. Quote the exact leaked string as evidence.
 
 GATE B — Response contains an error revealing a fetch attempt (🟡 LEAD):
   The server returned an error that implies it tried to make the request:
