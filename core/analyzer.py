@@ -161,25 +161,28 @@ def _python_pre_processor(requests: Sequence[BurpRequest]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# <analysis> block stripper
+# Report extractor
 # ---------------------------------------------------------------------------
 
-def _extract_report(text: str) -> str:
-    """Return everything after the closing </analysis> tag.
+_REPORT_DELIMITER = "===REPORT==="
 
-    Split on the literal tag so there is no regex involved — the LLM either
-    closed the block or it didn't.  Taking parts[-1] handles the rare case
-    where the model emits multiple closing tags.
+
+def _extract_report(text: str) -> str:
+    """Return everything after the ===REPORT=== delimiter.
+
+    Split on the plain-text delimiter — no XML parsing, no regex.
+    Takes parts[1] (the first occurrence) so any accidental repetition
+    of the delimiter inside the report itself is preserved.
     """
     print(f"[DEBUG] Raw LLM Response length: {len(text)} characters")
-    parts = text.split("</analysis>")
+    parts = text.split(_REPORT_DELIMITER)
     if len(parts) > 1:
-        report = parts[-1].strip()
+        report = parts[1].strip()
         if not report:
-            print("[!] Analysis block closed but no Markdown report followed it.")
+            print("[!] Delimiter found but no Markdown report followed it.")
         return report
-    # No closing tag — return the full text so nothing is silently lost.
-    print("[!] No </analysis> closing tag found — returning full LLM output.")
+    # Delimiter absent — return full text so nothing is silently lost.
+    print("[!] ===REPORT=== delimiter not found — returning full LLM output.")
     return text.strip()
 
 
@@ -255,15 +258,11 @@ def _build_prompt(
     knowledge_context = _get_knowledge_context(signal)
     traffic_context = _build_traffic_context(burp_requests, swagger_endpoints)
     system_hints = _python_pre_processor(burp_requests)
-    prompt = RED_TEAMER_PROMPT.format(
+    return RED_TEAMER_PROMPT.format(
         knowledge_context=knowledge_context,
         system_hints=system_hints,
         traffic_context=traffic_context,
     )
-    # Force the model to begin inside the analysis block. Local models reliably
-    # continue from a mid-tag prefix; they routinely ignore formatting rules in
-    # the preamble when the prompt is long.
-    return prompt + "\n\n<analysis>"
 
 
 # ---------------------------------------------------------------------------
